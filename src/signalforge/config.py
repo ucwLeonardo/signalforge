@@ -45,12 +45,43 @@ class KronosConfig:
 
 
 @dataclass(frozen=True)
+class QlibConfig:
+    enabled: bool = False
+    model_type: str = "lgbm"
+    features: str = "alpha158"
+    label_horizon: int = 5
+    device: str = "cuda"
+    qlib_data_dir: str = "~/.qlib/qlib_data/us_data"
+    region: str = "us"
+
+
+@dataclass(frozen=True)
+class ChronosConfig:
+    enabled: bool = False
+    model: str = "amazon/chronos-bolt-base"
+    pred_len: int = 5
+    num_samples: int = 20
+    device: str = "cuda"
+    quantiles: tuple[float, ...] = (0.1, 0.5, 0.9)
+
+
+@dataclass(frozen=True)
+class AgentsConfig:
+    enabled: bool = False
+    llm_provider: str = "anthropic"
+    deep_think_model: str = "claude-sonnet-4-6"
+    quick_think_model: str = "claude-haiku-4-5-20251001"
+    max_debate_rounds: int = 1
+    max_risk_rounds: int = 1
+
+
+@dataclass(frozen=True)
 class EnsembleConfig:
-    kronos_weight: float = 0.40
+    kronos_weight: float = 0.35
     qlib_weight: float = 0.20
     chronos_weight: float = 0.15
     agents_weight: float = 0.10
-    technical_weight: float = 0.15
+    technical_weight: float = 0.20
 
 
 @dataclass(frozen=True)
@@ -77,6 +108,9 @@ class Config:
     futures: list[str] = field(default_factory=list)
     data: DataConfig = field(default_factory=DataConfig)
     kronos: KronosConfig = field(default_factory=KronosConfig)
+    qlib: QlibConfig = field(default_factory=QlibConfig)
+    chronos: ChronosConfig = field(default_factory=ChronosConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
     ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
     output_format: str = "table"
     confidence_threshold: float = 0.3
@@ -134,6 +168,36 @@ def load_config(config_path: str | Path | None = None) -> Config:
         device=kronos_raw.get("device", "cuda"),
     )
 
+    qlib_raw = engines.get("qlib", {})
+    qlib_cfg = QlibConfig(
+        enabled=qlib_raw.get("enabled", False),
+        model_type=qlib_raw.get("model_type", "lgbm"),
+        features=qlib_raw.get("features", "alpha158"),
+        label_horizon=qlib_raw.get("label_horizon", 5),
+        device=qlib_raw.get("device", "cuda"),
+        qlib_data_dir=qlib_raw.get("qlib_data_dir", "~/.qlib/qlib_data/us_data"),
+        region=qlib_raw.get("region", "us"),
+    )
+
+    chronos_raw = engines.get("chronos", {})
+    chronos_cfg = ChronosConfig(
+        enabled=chronos_raw.get("enabled", False),
+        model=chronos_raw.get("model", "amazon/chronos-bolt-base"),
+        pred_len=chronos_raw.get("pred_len", 5),
+        num_samples=chronos_raw.get("num_samples", 20),
+        device=chronos_raw.get("device", "cuda"),
+    )
+
+    agents_raw = engines.get("trading_agents", {})
+    agents_cfg = AgentsConfig(
+        enabled=agents_raw.get("enabled", False),
+        llm_provider=agents_raw.get("llm_provider", "anthropic"),
+        deep_think_model=agents_raw.get("deep_think_model", "claude-sonnet-4-6"),
+        quick_think_model=agents_raw.get("quick_think_model", "claude-haiku-4-5-20251001"),
+        max_debate_rounds=agents_raw.get("max_debate_rounds", 1),
+        max_risk_rounds=agents_raw.get("max_risk_discuss_rounds", 1),
+    )
+
     stocks_data = data_raw.get("stocks", {})
     crypto_data = data_raw.get("crypto", {})
     futures_data = data_raw.get("futures", {})
@@ -169,6 +233,9 @@ def load_config(config_path: str | Path | None = None) -> Config:
         futures=assets.get("futures", []),
         data=data,
         kronos=kronos,
+        qlib=qlib_cfg,
+        chronos=chronos_cfg,
+        agents=agents_cfg,
         ensemble=ensemble,
         output_format=output_raw.get("format", "table"),
         confidence_threshold=output_raw.get("confidence_threshold", 0.3),

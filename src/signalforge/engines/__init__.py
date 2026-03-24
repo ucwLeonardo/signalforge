@@ -1,5 +1,6 @@
-"""Prediction engines: Kronos foundation model and technical analysis."""
+"""Prediction engines: Kronos foundation model, technical analysis, and agents."""
 
+from signalforge.engines.agents_engine import AgentsConfig, AgentsEngine
 from signalforge.engines.base import PredictionEngine, PredictionResult
 from signalforge.engines.kronos_engine import KronosConfig, KronosEngine
 from signalforge.engines.technical import (
@@ -9,6 +10,8 @@ from signalforge.engines.technical import (
 )
 
 __all__ = [
+    "AgentsConfig",
+    "AgentsEngine",
     "PredictionEngine",
     "PredictionResult",
     "KronosConfig",

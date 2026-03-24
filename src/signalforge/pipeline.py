@@ -95,6 +95,61 @@ def run_pipeline(
                 except Exception as e:
                     logger.error(f"Kronos failed for {symbol}: {e}")
 
+        # --- Qlib factor engine ---
+        if engines is None or "qlib" in engines or "all" in engines:
+            if config.qlib.enabled:
+                try:
+                    from signalforge.engines.qlib_engine import QlibEngine
+
+                    qlib_eng = QlibEngine(config.qlib)
+                    qlib_pred = qlib_eng.predict(df, pred_len=pred_len)
+                    if not qlib_pred.empty and "predicted_return" in qlib_pred.columns:
+                        pred_ret = float(qlib_pred["predicted_return"].iloc[-1])
+                        pred_close = current_price * (1 + pred_ret)
+                        engine_results["qlib"] = {
+                            "type": "price",
+                            "predicted_close": pred_close,
+                            "predicted_high": pred_close * 1.02,
+                            "predicted_low": pred_close * 0.98,
+                        }
+                except Exception as e:
+                    logger.error(f"Qlib failed for {symbol}: {e}")
+
+        # --- Chronos forecasting engine ---
+        if engines is None or "chronos" in engines or "all" in engines:
+            if config.chronos.enabled:
+                try:
+                    from signalforge.engines.chronos_engine import ChronosEngine
+
+                    chronos_eng = ChronosEngine(config.chronos)
+                    chronos_pred = chronos_eng.predict(df, pred_len=pred_len)
+                    if not chronos_pred.empty and "predicted_close" in chronos_pred.columns:
+                        engine_results["chronos"] = {
+                            "type": "price",
+                            "predicted_close": float(chronos_pred["predicted_close"].iloc[-1]),
+                            "predicted_high": float(chronos_pred["predicted_high"].max()),
+                            "predicted_low": float(chronos_pred["predicted_low"].min()),
+                        }
+                except Exception as e:
+                    logger.error(f"Chronos failed for {symbol}: {e}")
+
+        # --- TradingAgents LLM engine ---
+        if engines is None or "agents" in engines or "all" in engines:
+            if config.agents.enabled:
+                try:
+                    from signalforge.engines.agents_engine import AgentsEngine
+
+                    agents_eng = AgentsEngine(config.agents)
+                    agents_pred = agents_eng.predict(df, pred_len=pred_len)
+                    if not agents_pred.empty and "direction" in agents_pred.columns:
+                        engine_results["agents"] = {
+                            "type": "signal",
+                            "signal": float(agents_pred["direction"].iloc[-1]),
+                        }
+                except Exception as e:
+                    logger.error(f"TradingAgents failed for {symbol}: {e}")
+
+        # --- Technical analysis ---
         if engines is None or "technical" in engines or "all" in engines:
             try:
                 from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance

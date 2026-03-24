@@ -208,7 +208,71 @@ def setup() -> None:
             "git clone https://github.com/shiyu-coder/Kronos && pip install -r Kronos/requirements.txt"
         )
 
+    # Check Phase 2 dependencies
+    phase2_checks = {
+        "qlib": "pip install pyqlib",
+        "chronos": "pip install chronos-forecasting",
+        "tradingagents": "pip install tradingagents",
+        "rdagent": "pip install rdagent",
+    }
+    console.print("\n[bold]Phase 2+ Dependencies:[/bold]")
+    for module, install_cmd in phase2_checks.items():
+        try:
+            __import__(module)
+            console.print(f"  [green]OK[/green] {module}")
+        except ImportError:
+            console.print(f"  [yellow]OPTIONAL[/yellow] {module} → {install_cmd}")
+
     console.print("\n[bold green]Setup complete![/bold green]")
+
+
+@app.command()
+def evolve(
+    mode: str = typer.Option("factor", "--mode", "-m", help="Evolution mode: factor, model, joint"),
+    iterations: int = typer.Option(20, "--iterations", "-n", help="Max iterations"),
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Run automated factor/model evolution using RD-Agent."""
+    from signalforge.evolution import EvolutionConfig, FactorEvolver
+
+    console.print(
+        Panel(
+            f"[bold]Factor Evolution[/bold]\n"
+            f"Mode: {mode} | Max iterations: {iterations}",
+            title="SignalForge Evolution",
+            border_style="magenta",
+        )
+    )
+
+    evo_config = EvolutionConfig(
+        enabled=True,
+        mode=mode,
+        max_iterations=iterations,
+    )
+
+    evolver = FactorEvolver(evo_config)
+    result = evolver.run()
+
+    console.print(f"\n[bold]Results:[/bold]")
+    console.print(f"  Iterations completed: {result.iterations_completed}")
+    console.print(f"  Factors discovered: {len(result.factors_discovered)}")
+    console.print(f"  Models improved: {len(result.models_improved)}")
+
+    if result.factors_discovered:
+        from rich.table import Table
+
+        table = Table(title="Discovered Factors")
+        table.add_column("Name", style="cyan")
+        table.add_column("Window", justify="right")
+        table.add_column("Status")
+
+        for factor in result.factors_discovered[:20]:  # Show top 20
+            table.add_row(
+                factor.get("name", ""),
+                str(factor.get("window", "")),
+                factor.get("status", ""),
+            )
+        console.print(table)
 
 
 if __name__ == "__main__":
