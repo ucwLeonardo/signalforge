@@ -1,0 +1,152 @@
+"""Main pipeline: fetch data → run engines → ensemble → generate targets."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Sequence
+
+import pandas as pd
+from loguru import logger
+
+from signalforge.config import Config
+
+
+def _classify_symbol(symbol: str) -> str:
+    """Classify a symbol as stock, crypto, or futures."""
+    if "/" in symbol:
+        return "crypto"
+    if symbol.endswith("=F"):
+        return "futures"
+    return "stock"
+
+
+def _get_lookback_days(symbol_type: str, config: Config) -> int:
+    if symbol_type == "crypto":
+        return config.data.crypto_lookback_days
+    if symbol_type == "futures":
+        return config.data.futures_lookback_days
+    return config.data.stocks_lookback_days
+
+
+def run_pipeline(
+    symbols: list[str],
+    config: Config,
+    interval: str = "1d",
+    pred_len: int = 5,
+    engines: Sequence[str] | None = None,
+) -> list[dict]:
+    """Run the full signal generation pipeline.
+
+    Returns list of TradeTarget-like dicts for each symbol.
+    """
+    from signalforge.data.models import SupportResistance
+    from signalforge.data.providers import get_provider
+    from signalforge.ensemble.combiner import SignalCombiner
+    from signalforge.ensemble.targets import TargetCalculator
+
+    weights = {
+        "kronos": config.ensemble.kronos_weight,
+        "qlib": config.ensemble.qlib_weight,
+        "chronos": config.ensemble.chronos_weight,
+        "agents": config.ensemble.agents_weight,
+        "technical": config.ensemble.technical_weight,
+    }
+    combiner = SignalCombiner(weights)
+    calculator = TargetCalculator()
+    all_targets = []
+
+    for symbol in symbols:
+        logger.info(f"Processing {symbol}")
+        sym_type = _classify_symbol(symbol)
+
+        # 1. Fetch data
+        try:
+            provider = get_provider(symbol)
+            end = datetime.now()
+            start = end - timedelta(days=_get_lookback_days(sym_type, config))
+            df = provider.fetch(symbol, interval, start, end)
+
+            if df.empty or len(df) < 30:
+                logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
+                continue
+        except Exception as e:
+            logger.error(f"Data fetch failed for {symbol}: {e}")
+            continue
+
+        current_price = float(df["close"].iloc[-1])
+        engine_results: dict[str, dict] = {}
+
+        # 2. Run prediction engines
+        if engines is None or "kronos" in engines or "all" in engines:
+            if config.kronos.enabled:
+                try:
+                    from signalforge.engines.kronos_engine import KronosEngine
+
+                    kronos = KronosEngine(config.kronos)
+                    predictions = kronos.predict(df, pred_len=pred_len)
+                    if not predictions.empty:
+                        engine_results["kronos"] = {
+                            "type": "price",
+                            "predicted_close": float(predictions["close"].iloc[-1]),
+                            "predicted_high": float(predictions["high"].max()),
+                            "predicted_low": float(predictions["low"].min()),
+                            "predictions": predictions,
+                        }
+                except Exception as e:
+                    logger.error(f"Kronos failed for {symbol}: {e}")
+
+        if engines is None or "technical" in engines or "all" in engines:
+            try:
+                from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance
+
+                signals_df = compute_signals(df)
+                supports, resistances = compute_support_resistance(df)
+
+                support = supports[0] if supports else current_price * 0.95
+                resistance = resistances[0] if resistances else current_price * 1.05
+
+                if not signals_df.empty:
+                    last_signal = float(signals_df["signal_strength"].iloc[-1])
+                    engine_results["technical"] = {
+                        "type": "signal",
+                        "signal_strength": last_signal,
+                        "signal": last_signal,
+                        "support": support,
+                        "resistance": resistance,
+                    }
+            except Exception as e:
+                logger.error(f"Technical analysis failed for {symbol}: {e}")
+
+        if not engine_results:
+            logger.warning(f"No engine produced results for {symbol}")
+            continue
+
+        # 3. Combine signals - inject current_price into price-type engines
+        for eng_name, eng_result in engine_results.items():
+            if eng_result.get("type") == "price":
+                eng_result["current_price"] = current_price
+        combined = combiner.combine(engine_results)
+
+        # 4. Calculate targets
+        support = engine_results.get("technical", {}).get("support", current_price * 0.95)
+        resistance = engine_results.get("technical", {}).get("resistance", current_price * 1.05)
+        levels = SupportResistance(support=support, resistance=resistance)
+
+        target = calculator.calculate(
+            symbol=symbol,
+            signal=combined,
+            current_price=current_price,
+            levels=levels,
+            horizon_days=pred_len,
+        )
+
+        all_targets.append(target)
+        logger.info(
+            f"{symbol}: {target.action} | "
+            f"Entry: {target.entry_price:.2f} | "
+            f"Target: {target.target_price:.2f} | "
+            f"Stop: {target.stop_loss:.2f} | "
+            f"Conf: {target.confidence:.0%}"
+        )
+
+    return all_targets

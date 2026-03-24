@@ -1,0 +1,109 @@
+# SignalForge Default Configuration
+
+project:
+  name: signalforge
+  data_dir: ${HOME}/.signalforge/data
+  cache_dir: ${HOME}/.signalforge/cache
+  results_dir: ${HOME}/.signalforge/results
+
+# Asset universe - define what you want signals for
+assets:
+  us_stocks:
+    - AAPL
+    - MSFT
+    - NVDA
+    - TSLA
+    - GOOGL
+    - AMZN
+    - META
+    - AMD
+    - AVGO
+    - TSM
+  crypto:
+    - BTC/USDT
+    - ETH/USDT
+    - SOL/USDT
+    - BNB/USDT
+  futures:
+    - ES=F    # S&P 500 E-mini
+    - NQ=F    # Nasdaq 100 E-mini
+    - GC=F    # Gold
+    - CL=F    # Crude Oil
+
+# Data provider configuration
+data:
+  stocks:
+    provider: yfinance
+    interval: 1d        # 1m, 5m, 15m, 1h, 1d
+    lookback_days: 730  # 2 years
+  crypto:
+    provider: ccxt
+    exchange: binance
+    interval: 1d
+    lookback_days: 730
+  futures:
+    provider: yfinance
+    interval: 1d
+    lookback_days: 365
+
+# Prediction engines
+engines:
+  kronos:
+    enabled: true
+    model: "NeoQuasar/Kronos-base"
+    tokenizer: "NeoQuasar/Kronos-Tokenizer-base"
+    pred_len: 5           # Predict 5 candles ahead
+    lookback: 512         # Max context window
+    temperature: 0.8
+    top_p: 0.9
+    sample_count: 20      # Ensemble size for confidence
+    device: cuda          # cuda or cpu
+
+  qlib:
+    enabled: false        # Phase 2
+    model_type: lgbm      # lgbm, lstm, transformer
+    features: alpha158
+    label_horizon: 5      # 5-day return prediction
+
+  chronos:
+    enabled: false        # Phase 2
+    model: "amazon/chronos-bolt-base"
+    pred_len: 5
+
+  trading_agents:
+    enabled: false        # Phase 3
+    llm_provider: anthropic
+    deep_think_model: claude-sonnet-4-6
+    quick_think_model: claude-haiku-4-5-20251001
+
+# Technical analysis
+technical:
+  support_resistance:
+    method: pivot_cluster   # pivot_cluster, fibonacci, volume_profile
+    lookback: 60
+  indicators:
+    - name: RSI
+      period: 14
+    - name: MACD
+      fast: 12
+      slow: 26
+      signal: 9
+    - name: BBands
+      period: 20
+      std: 2.0
+    - name: ATR
+      period: 14
+
+# Signal ensemble weights
+ensemble:
+  kronos_weight: 0.40
+  qlib_weight: 0.20
+  chronos_weight: 0.15
+  agents_weight: 0.10
+  technical_weight: 0.15
+
+# Output settings
+output:
+  format: table           # table, json, csv
+  include_rationale: true
+  confidence_threshold: 0.3  # Min confidence to show signal
