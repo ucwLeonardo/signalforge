@@ -51,7 +51,9 @@ agents = [
 chronos = ["chronos-forecasting>=1.0"]
 backtest = ["vectorbt>=0.26"]
 sentiment = ["transformers>=4.40"]
-all = ["signalforge[qlib,agents,chronos,backtest,sentiment]"]
+dashboard = ["streamlit>=1.30"]
+evolution = ["rdagent"]
+all = ["signalforge[qlib,agents,chronos,backtest,sentiment,dashboard,evolution]"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio",

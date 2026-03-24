@@ -275,5 +275,20 @@ def evolve(
         console.print(table)
 
 
+@app.command()
+def dashboard(
+    port: int = typer.Option(8501, "--port", "-p", help="Streamlit port"),
+) -> None:
+    """Launch the interactive Streamlit dashboard."""
+    import subprocess
+
+    dashboard_path = Path(__file__).parent / "dashboard" / "app.py"
+    console.print(f"[bold]Launching dashboard on port {port}...[/bold]")
+    subprocess.run(
+        ["streamlit", "run", str(dashboard_path), "--server.port", str(port)],
+        check=True,
+    )
+
+
 if __name__ == "__main__":
     app()
