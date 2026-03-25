@@ -144,13 +144,90 @@ class TradeTarget:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class OptionContract:
+    """Parsed option contract details.
+
+    Attributes:
+        underlying: Underlying stock ticker (e.g. ``AAPL``).
+        expiration: Expiration date string (e.g. ``2026-06-19``).
+        strike: Strike price.
+        option_type: ``"C"`` for call, ``"P"`` for put.
+        occ_symbol: OCC-format symbol (e.g. ``AAPL260619C00200000``).
+    """
+
+    underlying: str
+    expiration: str
+    strike: float
+    option_type: str  # "C" or "P"
+    occ_symbol: str = ""
+
+
+def parse_option_symbol(symbol: str) -> OptionContract | None:
+    """Parse an option symbol in human or OCC format.
+
+    Supported formats:
+      - Human: ``"AAPL 2026-06-19 200 C"``
+      - OCC:   ``"AAPL260619C00200000"``
+
+    Returns None if the symbol is not a recognised option format.
+    """
+    import re
+
+    # Human format: "AAPL 2026-06-19 200 C" or "AAPL 2026-06-19 200.5 P"
+    human = re.match(
+        r"^([A-Z]+)\s+(\d{4}-\d{2}-\d{2})\s+([\d.]+)\s+([CP])$",
+        symbol.strip().upper(),
+    )
+    if human:
+        underlying = human.group(1)
+        expiration = human.group(2)
+        strike = float(human.group(3))
+        opt_type = human.group(4)
+        # Build OCC symbol: AAPL260619C00200000
+        exp_compact = expiration.replace("-", "")[2:]  # 260619
+        strike_occ = f"{int(strike * 1000):08d}"
+        occ = f"{underlying}{exp_compact}{opt_type}{strike_occ}"
+        return OptionContract(
+            underlying=underlying,
+            expiration=expiration,
+            strike=strike,
+            option_type=opt_type,
+            occ_symbol=occ,
+        )
+
+    # OCC format: AAPL260619C00200000 (ticker + YYMMDD + C/P + 8-digit strike*1000)
+    occ = re.match(
+        r"^([A-Z]+)(\d{6})([CP])(\d{8})$",
+        symbol.strip().upper(),
+    )
+    if occ:
+        underlying = occ.group(1)
+        exp_raw = occ.group(2)  # YYMMDD
+        opt_type = occ.group(3)
+        strike = int(occ.group(4)) / 1000.0
+        expiration = f"20{exp_raw[:2]}-{exp_raw[2:4]}-{exp_raw[4:6]}"
+        return OptionContract(
+            underlying=underlying,
+            expiration=expiration,
+            strike=strike,
+            option_type=opt_type,
+            occ_symbol=symbol.strip().upper(),
+        )
+
+    return None
+
+
 def classify_symbol(symbol: str) -> AssetType:
     """Infer asset type from a symbol string.
 
+    - Matches option format (human or OCC) -> options
     - Contains ``/`` -> crypto  (e.g. ``BTC/USDT``)
     - Ends with ``=F`` -> futures  (e.g. ``ES=F``)
     - Otherwise -> stock
     """
+    if parse_option_symbol(symbol) is not None:
+        return AssetType.OPTIONS
     if "/" in symbol:
         return AssetType.CRYPTO
     if symbol.endswith("=F"):

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 from loguru import logger
 
-from signalforge.data.models import Asset, AssetType, Bar, asset_from_symbol
+from signalforge.data.models import Asset, AssetType, Bar, OptionContract, asset_from_symbol, parse_option_symbol
 
 # ---------------------------------------------------------------------------
 # Column contract shared by every provider
@@ -260,6 +260,125 @@ class FuturesProvider(BaseProvider):
 
 
 # ---------------------------------------------------------------------------
+# Options provider (yfinance chain + underlying OHLCV)
+# ---------------------------------------------------------------------------
+class OptionsProvider(BaseProvider):
+    """Fetches option data using the underlying stock's OHLCV via *yfinance*,
+    enriched with current option chain Greeks/IV when available.
+
+    For historical signal generation, we use the underlying's price action
+    because free historical OHLCV for individual option contracts is not
+    available. The option chain snapshot provides current IV, volume, OI,
+    bid/ask, and Greeks for the specific contract.
+    """
+
+    def fetch(
+        self,
+        symbol_or_asset: str | Asset,
+        interval: str = "1d",
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> pd.DataFrame:
+        """Fetch underlying OHLCV and enrich with option chain data.
+
+        The returned DataFrame has standard OHLCV columns for the underlying
+        plus additional option-specific columns when available:
+        ``implied_volatility``, ``option_volume``, ``open_interest``,
+        ``bid``, ``ask``, ``delta``, ``gamma``, ``theta``.
+        """
+        import yfinance as yf
+
+        asset = _resolve_asset(symbol_or_asset)
+        contract = parse_option_symbol(asset.symbol)
+        if contract is None:
+            raise ValueError(f"Cannot parse option symbol: {asset.symbol}")
+
+        now = datetime.now(tz=timezone.utc)
+        start = start_date or (now - timedelta(days=365))
+        end = end_date or now
+
+        logger.info(
+            "OptionsProvider fetching underlying {} for option {} interval={} {} -> {}",
+            contract.underlying, asset.symbol, interval, start.date(), end.date(),
+        )
+
+        # 1. Fetch underlying stock OHLCV
+        ticker = yf.Ticker(contract.underlying)
+        hist: pd.DataFrame = ticker.history(
+            start=start.strftime("%Y-%m-%d"),
+            end=end.strftime("%Y-%m-%d"),
+            interval=interval,
+            auto_adjust=True,
+        )
+
+        if hist.empty:
+            logger.warning("No data returned for underlying {}", contract.underlying)
+            return pd.DataFrame(columns=OHLCV_COLUMNS)
+
+        hist = hist.reset_index()
+        date_col = "Date" if "Date" in hist.columns else "Datetime"
+        result = pd.DataFrame(
+            {
+                "timestamp": pd.to_datetime(hist[date_col], utc=True),
+                "open": hist["Open"].astype(float),
+                "high": hist["High"].astype(float),
+                "low": hist["Low"].astype(float),
+                "close": hist["Close"].astype(float),
+                "volume": hist["Volume"].astype(float),
+            }
+        )
+        result = result.sort_values("timestamp").reset_index(drop=True)
+
+        # 2. Enrich with current option chain snapshot
+        try:
+            chain = ticker.option_chain(contract.expiration)
+            options_df = chain.calls if contract.option_type == "C" else chain.puts
+            match = options_df[options_df["strike"] == contract.strike]
+            if not match.empty:
+                row = match.iloc[0]
+                # Add option metadata to the last bar
+                result["implied_volatility"] = float(row.get("impliedVolatility", 0.0))
+                result["option_volume"] = float(row.get("volume", 0) or 0)
+                result["open_interest"] = float(row.get("openInterest", 0) or 0)
+                result["bid"] = float(row.get("bid", 0.0))
+                result["ask"] = float(row.get("ask", 0.0))
+                logger.info(
+                    "Option chain enriched: IV={:.2%} Vol={} OI={}",
+                    result["implied_volatility"].iloc[-1],
+                    result["option_volume"].iloc[-1],
+                    result["open_interest"].iloc[-1],
+                )
+            else:
+                logger.warning(
+                    "Strike {} not found in chain for {} exp {}",
+                    contract.strike, contract.underlying, contract.expiration,
+                )
+        except Exception as e:
+            logger.warning("Option chain fetch failed (non-fatal): {}", e)
+
+        logger.info("OptionsProvider returned {} bars for {}", len(result), asset.symbol)
+        return result
+
+    def fetch_chain(self, underlying: str, expiration: str) -> dict[str, pd.DataFrame]:
+        """Fetch the full option chain for an underlying + expiration.
+
+        Returns ``{"calls": DataFrame, "puts": DataFrame}``.
+        """
+        import yfinance as yf
+
+        ticker = yf.Ticker(underlying)
+        chain = ticker.option_chain(expiration)
+        return {"calls": chain.calls, "puts": chain.puts}
+
+    def fetch_expirations(self, underlying: str) -> tuple[str, ...]:
+        """List available expiration dates for an underlying."""
+        import yfinance as yf
+
+        ticker = yf.Ticker(underlying)
+        return ticker.options
+
+
+# ---------------------------------------------------------------------------
 # Factory helper
 # ---------------------------------------------------------------------------
 def get_provider(symbol_or_asset: str | Asset | AssetType, **kwargs: object) -> BaseProvider:
@@ -282,6 +401,7 @@ def get_provider(symbol_or_asset: str | Asset | AssetType, **kwargs: object) -> 
         AssetType.STOCK: StockProvider,
         AssetType.CRYPTO: CryptoProvider,
         AssetType.FUTURES: FuturesProvider,
+        AssetType.OPTIONS: OptionsProvider,
     }
     cls = providers.get(asset_type)
     if cls is None:

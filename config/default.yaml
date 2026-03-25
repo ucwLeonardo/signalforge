@@ -20,15 +20,41 @@ assets:
     - AVGO
     - TSM
   crypto:
+    # Major
     - BTC/USDT
     - ETH/USDT
     - SOL/USDT
     - BNB/USDT
+    # DeFi
+    - LINK/USDT
+    - UNI/USDT
+    - AAVE/USDT
+    - MKR/USDT
+    # Layer 2 / Alt L1
+    - AVAX/USDT
+    - DOT/USDT
+    - MATIC/USDT
+    - ARB/USDT
+    - OP/USDT
+    - SUI/USDT
+    - SEI/USDT
+    - TIA/USDT
+    # AI tokens
+    - FET/USDT
+    - RNDR/USDT
+    - TAO/USDT
+    # Meme
+    - DOGE/USDT
+    - SHIB/USDT
+    - PEPE/USDT
+    - WIF/USDT
+    - BONK/USDT
   futures:
     - ES=F    # S&P 500 E-mini
     - NQ=F    # Nasdaq 100 E-mini
     - GC=F    # Gold
     - CL=F    # Crude Oil
+  options: []  # e.g. ["AAPL 2026-06-19 200 C", "NVDA 2026-06-19 150 P"]
 
 # Data provider configuration
 data:
@@ -45,6 +71,11 @@ data:
     provider: yfinance
     interval: 1d
     lookback_days: 365
+  options:
+    provider: yfinance       # uses underlying OHLCV + option chain Greeks/IV
+    interval: 1d
+    lookback_days: 365       # for the underlying stock
+    polygon_api_key: ""      # optional: set for historical options bars via Polygon.io
 
 # Prediction engines
 engines:
@@ -60,18 +91,18 @@ engines:
     device: cuda          # cuda or cpu
 
   qlib:
-    enabled: false        # Phase 2
+    enabled: true         # Falls back to ridge regression if pyqlib not installed
     model_type: lgbm      # lgbm, lstm, transformer
     features: alpha158
     label_horizon: 5      # 5-day return prediction
 
   chronos:
-    enabled: false        # Phase 2
+    enabled: true         # Falls back to Holt's linear trend if chronos not installed
     model: "amazon/chronos-bolt-base"
     pred_len: 5
 
   trading_agents:
-    enabled: false        # Phase 3
+    enabled: true         # Falls back to rule-based price-action if no API keys
     llm_provider: anthropic
     deep_think_model: claude-sonnet-4-6
     quick_think_model: claude-haiku-4-5-20251001

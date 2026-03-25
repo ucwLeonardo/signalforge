@@ -96,6 +96,10 @@ class DataConfig:
     futures_provider: str = "yfinance"
     futures_interval: str = "1d"
     futures_lookback_days: int = 365
+    options_provider: str = "yfinance"
+    options_interval: str = "1d"
+    options_lookback_days: int = 365
+    polygon_api_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,7 @@ class Config:
     us_stocks: list[str] = field(default_factory=list)
     crypto: list[str] = field(default_factory=list)
     futures: list[str] = field(default_factory=list)
+    options: list[str] = field(default_factory=list)
     data: DataConfig = field(default_factory=DataConfig)
     kronos: KronosConfig = field(default_factory=KronosConfig)
     qlib: QlibConfig = field(default_factory=QlibConfig)
@@ -140,6 +145,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
             us_stocks=["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL"],
             crypto=["BTC/USDT", "ETH/USDT"],
             futures=["ES=F", "NQ=F", "GC=F"],
+            options=[],
         )
 
     logger.info(f"Loading config from {config_path}")
@@ -202,6 +208,8 @@ def load_config(config_path: str | Path | None = None) -> Config:
     crypto_data = data_raw.get("crypto", {})
     futures_data = data_raw.get("futures", {})
 
+    options_data = data_raw.get("options", {})
+
     data = DataConfig(
         stocks_provider=stocks_data.get("provider", "yfinance"),
         stocks_interval=stocks_data.get("interval", "1d"),
@@ -213,6 +221,10 @@ def load_config(config_path: str | Path | None = None) -> Config:
         futures_provider=futures_data.get("provider", "yfinance"),
         futures_interval=futures_data.get("interval", "1d"),
         futures_lookback_days=futures_data.get("lookback_days", 365),
+        options_provider=options_data.get("provider", "yfinance"),
+        options_interval=options_data.get("interval", "1d"),
+        options_lookback_days=options_data.get("lookback_days", 365),
+        polygon_api_key=options_data.get("polygon_api_key", ""),
     )
 
     ensemble = EnsembleConfig(
@@ -231,6 +243,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         us_stocks=assets.get("us_stocks", []),
         crypto=assets.get("crypto", []),
         futures=assets.get("futures", []),
+        options=assets.get("options", []),
         data=data,
         kronos=kronos,
         qlib=qlib_cfg,

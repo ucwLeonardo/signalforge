@@ -14,19 +14,24 @@ Market Data → 5 Prediction Engines → Weighted Ensemble → Buy/Sell Price Ta
 
 | Engine | Type | What It Predicts | Powered By |
 |--------|------|-----------------|------------|
-| **Kronos** | Price Forecast | Future OHLCV candles | [Kronos](https://github.com/shiyu-coder/Kronos) foundation model (102M params, trained on 12B+ candles from 45 exchanges) |
-| **Qlib** | Factor Model | Expected returns from 158 alpha factors | [Microsoft Qlib](https://github.com/microsoft/qlib) ML pipeline (LightGBM/LSTM/Transformer) |
-| **Chronos** | Time Series | Probabilistic price forecasts with confidence intervals | [Amazon Chronos-2](https://github.com/amazon-science/chronos-forecasting) |
-| **TradingAgents** | LLM Analysis | Directional signal from multi-agent debate | [TradingAgents](https://github.com/TauricResearch/TradingAgents) (bull/bear/risk analysts) |
-| **Technical** | Indicators | RSI, MACD, Bollinger, support/resistance levels | pandas-ta + custom S/R clustering |
+| **Kronos** (40%) | Price Forecast | Future OHLCV candles | [Kronos](https://github.com/shiyu-coder/Kronos) foundation model (102M params) |
+| **Qlib** (20%) | Factor Model | Expected returns from 158 alpha factors | [Microsoft Qlib](https://github.com/microsoft/qlib) (LightGBM/LSTM/Transformer) |
+| **Chronos** (15%) | Time Series | Probabilistic price forecasts with intervals | [Amazon Chronos-2](https://github.com/amazon-science/chronos-forecasting) |
+| **Technical** (15%) | Indicators | RSI, MACD, Bollinger, support/resistance | pandas-ta + custom S/R clustering |
+| **TradingAgents** (10%) | LLM Analysis | Directional signal from multi-agent debate | [TradingAgents](https://github.com/TauricResearch/TradingAgents) |
 
-### Evolution Layer
+Every engine has a **built-in fallback** — the system runs immediately after install, no GPU or API keys required.
 
-| Tool | What It Does |
-|------|-------------|
-| **RD-Agent** | Automated alpha factor discovery via LLM-powered R&D loop ([Microsoft RD-Agent](https://github.com/microsoft/RD-Agent)) |
+### Supported Asset Types
 
-Every engine has a **built-in fallback** that works without external dependencies, so the system runs immediately after install.
+| Type | Format | Example | Data Source |
+|------|--------|---------|-------------|
+| **US Stocks** | Ticker | `AAPL`, `NVDA` | yfinance |
+| **Crypto** | `BASE/QUOTE` | `BTC/USDT`, `SOL/USDT` | ccxt (Binance) |
+| **Futures** | `TICKER=F` | `ES=F`, `GC=F` | yfinance |
+| **Options** | Human or OCC | `AAPL 2026-06-19 200 C` | yfinance (underlying + chain Greeks/IV) |
+
+Options use the underlying stock's OHLCV enriched with current option chain data (implied volatility, volume, open interest, bid/ask).
 
 ## Quick Start
 
@@ -36,15 +41,14 @@ git clone https://github.com/ucwLeonardo/signalforge.git
 cd signalforge
 pip install -e .
 
-# Generate signals
-signalforge scan AAPL NVDA TSLA BTC/USDT ES=F
+# Check setup
+signalforge setup
 
-# Deep prediction for a single asset
-signalforge predict AAPL --horizon 10
+# Scan all default assets (10 stocks + 24 crypto + 4 futures)
+signalforge scan
 
-# Interactive dashboard
-pip install streamlit
-signalforge dashboard
+# Scan specific symbols
+signalforge scan AAPL BTC/USDT ES=F "AAPL 2026-06-19 200 C"
 ```
 
 ### Example Output
@@ -59,6 +63,105 @@ signalforge dashboard
 └──────────┴────────┴────────┴────────┴────────┴──────┴────────────┴────────────────────────┘
 ```
 
+## Use Case Workflows
+
+### Find Top 5 Most Confident Crypto Buy Signals
+
+```bash
+signalforge top -t crypto -n 5
+```
+
+### Find Top 5 US Stock Buy Signals
+
+```bash
+signalforge top -t stock -n 5
+```
+
+### Find Top Sell Signals Across All Assets
+
+```bash
+signalforge top -a sell -n 10
+```
+
+### Scan Trending / New Crypto for Hyper-Growth
+
+```bash
+signalforge scan PEPE/USDT WIF/USDT BONK/USDT SUI/USDT TIA/USDT TAO/USDT \
+  --horizon 10 --format json
+```
+
+Use `--horizon 10` for longer-term growth potential. Pipe through `jq` or sort by `risk_reward_ratio` for asymmetric bets.
+
+### Scan Options
+
+```bash
+# Human-readable format
+signalforge scan "AAPL 2026-06-19 200 C" "NVDA 2026-06-19 150 P"
+
+# OCC format
+signalforge scan AAPL260619C00200000
+```
+
+### Deep Dive on a Single Asset
+
+```bash
+signalforge predict NVDA --horizon 10
+```
+
+Shows predicted OHLCV candles for the next 10 bars with price range and direction.
+
+### Export for Downstream Processing
+
+```bash
+# JSON for scripts/APIs
+signalforge top -t crypto -n 20 -f json > signals.json
+
+# CSV for spreadsheets
+signalforge scan --format csv > signals.csv
+```
+
+## CLI Commands
+
+```bash
+signalforge scan                              # Scan all configured assets
+signalforge scan AAPL BTC/USDT ES=F          # Scan specific symbols
+signalforge scan --engine kronos              # Use only one engine
+signalforge scan --format json                # Output as JSON/CSV
+
+signalforge top                               # Top 5 buy signals (all assets)
+signalforge top -n 10 -a sell -t crypto       # Top 10 sell signals for crypto
+signalforge top -a all -t stock               # Top 5 buy+sell for stocks
+signalforge top -t options                    # Top 5 buy signals for options
+
+signalforge predict AAPL --horizon 10         # Kronos prediction for one symbol
+signalforge fetch AAPL MSFT --days 730        # Pre-fetch and cache data
+signalforge evolve --mode factor -n 20        # Auto-discover alpha factors
+signalforge dashboard                         # Launch Streamlit web UI
+signalforge setup                             # Check dependencies
+```
+
+## Default Asset Universe
+
+### Crypto (24 pairs)
+
+| Category | Symbols |
+|----------|---------|
+| **Major** | BTC, ETH, SOL, BNB |
+| **DeFi** | LINK, UNI, AAVE, MKR |
+| **L2 / Alt L1** | AVAX, DOT, MATIC, ARB, OP, SUI, SEI, TIA |
+| **AI Tokens** | FET, RNDR, TAO |
+| **Meme** | DOGE, SHIB, PEPE, WIF, BONK |
+
+### Stocks (10)
+
+AAPL, MSFT, NVDA, TSLA, GOOGL, AMZN, META, AMD, AVGO, TSM
+
+### Futures (4)
+
+ES=F (S&P 500), NQ=F (Nasdaq), GC=F (Gold), CL=F (Crude Oil)
+
+Edit `config/default.yaml` to customize.
+
 ## Installation
 
 ### Core (works immediately)
@@ -67,7 +170,15 @@ signalforge dashboard
 pip install -e .
 ```
 
-This installs yfinance, ccxt, pandas-ta, torch, and other core deps. All engines run with baseline fallbacks.
+All engines run with built-in fallbacks — no GPU, API keys, or optional deps required.
+
+| Engine | Fallback (no extra deps) |
+|--------|--------------------------|
+| Kronos | Linear regression |
+| Qlib | Ridge regression on momentum/mean-reversion factors |
+| Chronos | Holt's linear trend exponential smoothing |
+| TradingAgents | Rule-based RSI + price-action sentiment |
+| Technical | Built-in RSI/MACD/BBands/ATR (numpy/pandas) |
 
 ### Unlock Real Engines
 
@@ -97,23 +208,9 @@ pip install streamlit
 pip install -e ".[all]"
 ```
 
-## CLI Commands
-
-```bash
-signalforge scan                          # Scan all configured assets
-signalforge scan AAPL BTC/USDT ES=F      # Scan specific symbols
-signalforge scan --engine kronos          # Use only one engine
-signalforge scan --format json            # Output as JSON
-signalforge predict AAPL --horizon 10     # Kronos prediction for one symbol
-signalforge fetch AAPL MSFT --days 730    # Pre-fetch and cache data
-signalforge evolve --mode factor -n 20    # Auto-discover alpha factors
-signalforge dashboard                     # Launch Streamlit web UI
-signalforge setup                         # Check dependencies
-```
-
 ## Configuration
 
-Edit `config/default.yaml` to customize:
+Edit `config/default.yaml`:
 
 ```yaml
 # Asset universe
@@ -121,14 +218,15 @@ assets:
   us_stocks: [AAPL, MSFT, NVDA, TSLA, GOOGL]
   crypto: [BTC/USDT, ETH/USDT, SOL/USDT]
   futures: [ES=F, NQ=F, GC=F]
+  options: ["AAPL 2026-06-19 200 C"]
 
 # Engine weights for ensemble
 ensemble:
-  kronos_weight: 0.35
+  kronos_weight: 0.40
   qlib_weight: 0.20
   chronos_weight: 0.15
   agents_weight: 0.10
-  technical_weight: 0.20
+  technical_weight: 0.15
 
 # Kronos settings
 engines:
@@ -142,8 +240,8 @@ engines:
 ## GPU Support
 
 SignalForge leverages your GPU for:
-- **Kronos** fine-tuning and inference (~1-2 GB VRAM)
-- **Qlib** LSTM/Transformer model training (~4 GB VRAM)
+- **Kronos** inference (~1-2 GB VRAM)
+- **Qlib** LSTM/Transformer training (~4 GB VRAM)
 - **Chronos-2** inference (~2 GB VRAM)
 
 An RTX 5090 (32 GB) can run all engines simultaneously.
@@ -159,8 +257,8 @@ signalforge/
 │   ├── config.py              # YAML config loader
 │   ├── pipeline.py            # Orchestration pipeline
 │   ├── data/
-│   │   ├── models.py          # Frozen dataclasses (Bar, Asset, Signal, TradeTarget)
-│   │   ├── providers.py       # yfinance + ccxt data providers
+│   │   ├── models.py          # Frozen dataclasses (Bar, Asset, Signal, TradeTarget, OptionContract)
+│   │   ├── providers.py       # Stock, Crypto, Futures, Options data providers
 │   │   └── store.py           # Parquet-based data cache
 │   ├── engines/
 │   │   ├── kronos_engine.py   # Kronos foundation model
@@ -177,7 +275,15 @@ signalforge/
 │   │   └── app.py             # Streamlit web dashboard
 │   └── evolution/
 │       └── rdagent_runner.py  # RD-Agent factor evolution
-└── notebooks/                 # Jupyter notebooks (coming soon)
+└── tests/                     # 127 tests (pytest)
+```
+
+## Testing
+
+```bash
+pip install pytest pytest-cov
+PYTHONPATH=src pytest tests/ -v            # Run all tests
+PYTHONPATH=src pytest tests/ --cov=signalforge  # With coverage
 ```
 
 ## Disclaimer

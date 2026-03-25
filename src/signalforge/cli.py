@@ -38,7 +38,7 @@ def scan(
 
     # Determine symbols to scan
     if not symbols:
-        all_symbols = cfg.us_stocks + cfg.crypto + cfg.futures
+        all_symbols = cfg.us_stocks + cfg.crypto + cfg.futures + cfg.options
     else:
         all_symbols = list(symbols)
 
@@ -273,6 +273,101 @@ def evolve(
                 factor.get("status", ""),
             )
         console.print(table)
+
+
+@app.command()
+def top(
+    n: int = typer.Option(5, "--n", "-n", help="Number of top signals to show"),
+    action_filter: str = typer.Option("buy", "--action", "-a", help="Filter: buy, sell, all"),
+    asset_type: str = typer.Option("all", "--type", "-t", help="Asset type: stock, crypto, futures, options, all"),
+    symbols: Optional[list[str]] = typer.Argument(
+        None, help="Symbols to scan. Uses config defaults if empty."
+    ),
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+    interval: str = typer.Option("1d", "--interval", "-i"),
+    pred_len: int = typer.Option(5, "--horizon", "-h"),
+    output_format: str = typer.Option("table", "--format", "-f", help="Output: table, json, csv"),
+) -> None:
+    """Find top N most confident buy/sell signals across assets.
+
+    Examples:
+        signalforge top                          # Top 5 buy signals across all assets
+        signalforge top -n 10 -a sell -t crypto  # Top 10 sell signals for crypto
+        signalforge top -a all -t stock          # Top 5 signals (buy+sell) for stocks
+        signalforge top AAPL NVDA TSLA -n 3      # Top 3 from specific symbols
+    """
+    from signalforge.config import load_config
+    from signalforge.data.models import TradeAction, classify_symbol
+    from signalforge.pipeline import run_pipeline
+
+    cfg = load_config(config_path)
+
+    # Determine symbols
+    if symbols:
+        all_symbols = list(symbols)
+    elif asset_type == "stock":
+        all_symbols = cfg.us_stocks
+    elif asset_type == "crypto":
+        all_symbols = cfg.crypto
+    elif asset_type == "futures":
+        all_symbols = cfg.futures
+    elif asset_type == "options":
+        all_symbols = cfg.options
+    else:
+        all_symbols = cfg.us_stocks + cfg.crypto + cfg.futures + cfg.options
+
+    if not all_symbols:
+        console.print(f"[red]No {asset_type} symbols configured.[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        Panel(
+            f"[bold]Finding top {n} {action_filter.upper()} signals[/bold]\n"
+            f"Scanning {len(all_symbols)} {asset_type} assets | Horizon: {pred_len} bars",
+            title="SignalForge Top",
+            border_style="green",
+        )
+    )
+
+    targets = run_pipeline(
+        symbols=all_symbols,
+        config=cfg,
+        interval=interval,
+        pred_len=pred_len,
+    )
+
+    # Filter by action
+    action_upper = action_filter.upper()
+    if action_upper == "BUY":
+        targets = [t for t in targets if t.action == TradeAction.BUY]
+    elif action_upper == "SELL":
+        targets = [t for t in targets if t.action == TradeAction.SELL]
+    # "all" keeps everything
+
+    # Sort by confidence descending, then by risk-reward ratio
+    targets.sort(key=lambda t: (t.confidence, t.risk_reward_ratio), reverse=True)
+
+    # Take top N
+    top_targets = targets[:n]
+
+    if not top_targets:
+        console.print(f"[yellow]No {action_filter.upper()} signals found.[/yellow]")
+        raise typer.Exit(0)
+
+    from signalforge.output.report import ReportGenerator
+
+    generator = ReportGenerator()
+    output = generator.generate_report(top_targets, fmt=output_format)
+    console.print(output)
+
+    # Summary line
+    if top_targets:
+        best = top_targets[0]
+        console.print(
+            f"\n[bold green]Best signal:[/bold green] {best.symbol} "
+            f"[bold]{best.action.value}[/bold] at {best.entry_price:.2f} "
+            f"→ {best.target_price:.2f} (confidence: {best.confidence:.0%}, R:R {best.risk_reward_ratio:.1f})"
+        )
 
 
 @app.command()

@@ -6,17 +6,20 @@ from signalforge.data.models import (
     AssetType,
     Bar,
     CombinedSignal,
+    OptionContract,
     Signal,
     SupportResistance,
     TradeAction,
     TradeTarget,
     asset_from_symbol,
     classify_symbol,
+    parse_option_symbol,
 )
 from signalforge.data.providers import (
     BaseProvider,
     CryptoProvider,
     FuturesProvider,
+    OptionsProvider,
     StockProvider,
     get_provider,
 )
@@ -32,6 +35,8 @@ __all__ = [
     "CryptoProvider",
     "DataStore",
     "FuturesProvider",
+    "OptionContract",
+    "OptionsProvider",
     "Signal",
     "StockProvider",
     "SupportResistance",
@@ -40,4 +45,5 @@ __all__ = [
     "asset_from_symbol",
     "classify_symbol",
     "get_provider",
+    "parse_option_symbol",
 ]

@@ -12,7 +12,11 @@ from signalforge.config import Config
 
 
 def _classify_symbol(symbol: str) -> str:
-    """Classify a symbol as stock, crypto, or futures."""
+    """Classify a symbol as stock, crypto, futures, or options."""
+    from signalforge.data.models import parse_option_symbol
+
+    if parse_option_symbol(symbol) is not None:
+        return "options"
     if "/" in symbol:
         return "crypto"
     if symbol.endswith("=F"):
@@ -25,6 +29,8 @@ def _get_lookback_days(symbol_type: str, config: Config) -> int:
         return config.data.crypto_lookback_days
     if symbol_type == "futures":
         return config.data.futures_lookback_days
+    if symbol_type == "options":
+        return config.data.options_lookback_days
     return config.data.stocks_lookback_days
 
 
