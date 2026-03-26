@@ -1,0 +1,12 @@
+[  192158ms] [ERROR] Access to fetch at 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd' from origin 'http://localhost:8787' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:8787/:0
+[  192158ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd:0
+[  192158ms] [WARNING] CoinGecko fetch failed: TypeError: Failed to fetch
+    at fetchLivePrices (http://localhost:8787/:605:23)
+    at refreshAll (http://localhost:8787/:673:13) @ http://localhost:8787/:614
+[   60357ms] [ERROR] Access to fetch at 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd' from origin 'http://localhost:8787' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:8787/:0
+[   60357ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd:0
+[   60357ms] [WARNING] CoinGecko fetch failed: TypeError: Failed to fetch
+    at fetchLivePrices (http://localhost:8787/:605:23)
+    at refreshAll (http://localhost:8787/:673:13) @ http://localhost:8787/:614
+[  242359ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:8787/api/prices:0
+[  242361ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://localhost:8787/api/portfolio:0
