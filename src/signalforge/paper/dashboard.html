@@ -512,31 +512,34 @@
 
 <div class="container">
   <!-- A) Summary Bar -->
-  <div class="summary-bar" id="summary-bar">
-    <div class="summary-item">
-      <div class="label">Total Value</div>
-      <div class="value large mono" id="s-total-value">--</div>
-    </div>
-    <div class="summary-item">
-      <div class="label">Cash</div>
-      <div class="value mono" id="s-cash">--</div>
-    </div>
-    <div class="summary-item">
-      <div class="label">Positions Value</div>
-      <div class="value mono" id="s-positions-value">--</div>
-    </div>
-    <div class="summary-item">
-      <div class="label">Total P&amp;L</div>
-      <div class="value mono" id="s-total-pnl">--</div>
-      <div class="sub mono" id="s-total-pnl-pct">--</div>
-    </div>
-    <div class="summary-item">
-      <div class="label">Unrealized P&amp;L</div>
-      <div class="value mono" id="s-unrealized-pnl">--</div>
-    </div>
-    <div class="summary-item">
-      <div class="label">Realized P&amp;L</div>
-      <div class="value mono" id="s-realized-pnl">--</div>
+  <!-- A) Portfolio overview (hidden until positions/trades exist) -->
+  <div id="portfolio-overview" style="display:none;">
+    <div class="summary-bar" id="summary-bar">
+      <div class="summary-item">
+        <div class="label">Total Value</div>
+        <div class="value large mono" id="s-total-value">--</div>
+      </div>
+      <div class="summary-item">
+        <div class="label">Cash</div>
+        <div class="value mono" id="s-cash">--</div>
+      </div>
+      <div class="summary-item">
+        <div class="label">Positions Value</div>
+        <div class="value mono" id="s-positions-value">--</div>
+      </div>
+      <div class="summary-item">
+        <div class="label">Total P&amp;L</div>
+        <div class="value mono" id="s-total-pnl">--</div>
+        <div class="sub mono" id="s-total-pnl-pct">--</div>
+      </div>
+      <div class="summary-item">
+        <div class="label">Unrealized P&amp;L</div>
+        <div class="value mono" id="s-unrealized-pnl">--</div>
+      </div>
+      <div class="summary-item">
+        <div class="label">Realized P&amp;L</div>
+        <div class="value mono" id="s-realized-pnl">--</div>
+      </div>
     </div>
   </div>
 
@@ -1139,9 +1142,10 @@
     rpEl.textContent = fmtUsd(p.realized_pnl);
     rpEl.className = 'value mono ' + pnlClass(p.realized_pnl);
 
-    // Show chart card only when there are positions or value history
+    // Show portfolio overview + chart only when there are positions or completed trades
     var hasActivity = (p.positions && p.positions.length > 0) ||
-                      (p.value_history && p.value_history.length > 1);
+                      (p.trades_count > 0) || (p.realized_pnl !== 0);
+    document.getElementById('portfolio-overview').style.display = hasActivity ? '' : 'none';
     document.getElementById('chart-card').style.display = hasActivity ? '' : 'none';
   }
 
