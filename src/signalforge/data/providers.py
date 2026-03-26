@@ -142,7 +142,7 @@ class CryptoProvider(BaseProvider):
         exchange_cls = getattr(ccxt, self._exchange_id, None)
         if exchange_cls is None:
             raise ValueError(f"Unknown ccxt exchange: {self._exchange_id}")
-        return exchange_cls({"enableRateLimit": True})
+        return exchange_cls({"enableRateLimit": True, "timeout": 15000})
 
     def fetch(
         self,
