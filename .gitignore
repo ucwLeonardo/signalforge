@@ -13,3 +13,18 @@ build/
 .claude/
 .playwright-mcp/
 .serena/
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Shell configs (sandbox artifacts)
+.bash_profile
+.bashrc
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.gitmodules
+.ripgreprc
+.mcp.json
