@@ -171,11 +171,19 @@ def discover_crypto(
                 f"No active {quote} spot markets found on {exchange_id}"
             )
 
-        # Fetch tickers for volume ranking
+        logger.info(
+            "Found {} candidate {}/{} pairs on {}, fetching volumes...",
+            len(candidate_symbols), "*", quote, exchange_id,
+        )
+
+        # Fetch tickers for volume ranking (batch to avoid timeout)
         try:
-            tickers = exchange.fetch_tickers(candidate_symbols[:200])
+            # Only fetch top 100 to avoid Gate.io timeout
+            batch = candidate_symbols[:100]
+            exchange.timeout = 15000  # 15s timeout
+            tickers = exchange.fetch_tickers(batch)
             volume_pairs: list[tuple[str, float]] = []
-            for sym in candidate_symbols:
+            for sym in batch:
                 ticker = tickers.get(sym, {})
                 vol_quote = ticker.get("quoteVolume") or 0.0
                 if vol_quote >= min_volume_usd:
@@ -183,8 +191,8 @@ def discover_crypto(
 
             volume_pairs.sort(key=lambda p: p[1], reverse=True)
             result = [p[0] for p in volume_pairs[:max_symbols]]
-        except Exception:
-            # If ticker fetch fails, just return alphabetically
+        except Exception as ticker_exc:
+            logger.warning("Ticker fetch failed ({}), using alphabetical", ticker_exc)
             result = sorted(candidate_symbols)[:max_symbols]
 
         logger.info(

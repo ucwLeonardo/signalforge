@@ -65,6 +65,11 @@ def generate_real_signals(
     if categories is None:
         categories = ["us_stocks", "crypto"]
 
+    # Report discovery phase
+    if progress_cb:
+        progress_cb({"total": 0, "completed": 0, "symbol": "",
+                      "stage": "discovery", "detail": f"Discovering assets for {', '.join(categories)}..."})
+
     symbols = _get_symbols_for_categories(categories, config)
     if not symbols:
         return []
@@ -73,6 +78,10 @@ def generate_real_signals(
         f"[SignalForge] Generating signals for {len(symbols)} assets "
         f"(categories: {', '.join(categories)})...\n"
     )
+
+    if progress_cb:
+        progress_cb({"total": len(symbols), "completed": 0, "symbol": "",
+                      "stage": "discovery", "detail": f"Discovered {len(symbols)} assets, starting pipeline..."})
 
     targets = run_pipeline(
         symbols=symbols,

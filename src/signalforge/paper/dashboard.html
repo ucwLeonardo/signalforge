@@ -400,6 +400,8 @@
     font-weight: 500;
     margin-left: 8px;
   }
+  .scan-progress .sp-stage.discovery { background: rgba(210,153,34,0.15); color: #d29922; }
+  .scan-progress .sp-stage.cancelled { background: rgba(248,81,73,0.15); color: var(--red); }
   .scan-progress .sp-stage.data { background: rgba(88,166,255,0.15); color: var(--blue); }
   .scan-progress .sp-stage.lstm { background: rgba(163,113,247,0.15); color: #a371f7; }
   .scan-progress .sp-stage.gbm { background: rgba(210,153,34,0.15); color: #d29922; }
@@ -820,9 +822,9 @@
 
     var stageEl = document.getElementById('sp-stage');
     var stageNames = {
-      data: 'Downloading', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
+      discovery: 'Discovering', data: 'Downloading', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
       agents: 'TradingAgents', ensemble: 'Combining', done: 'Done', complete: 'Complete',
-      starting: 'Starting', error: 'Error'
+      starting: 'Starting', cancelled: 'Cancelled', error: 'Error'
     };
     stageEl.textContent = stageNames[s.stage] || s.stage || '--';
     stageEl.className = 'sp-stage ' + (s.stage || '');
@@ -835,7 +837,7 @@
     document.getElementById('sp-pct').textContent = pct + '%';
     document.getElementById('sp-bar-fill').style.width = pct + '%';
 
-    var phaseNames = {data:'Downloading data',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',error:'Error'};
+    var phaseNames = {discovery:'Discovering assets',data:'Downloading data',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Cancelled',error:'Error'};
     var title = s.total > 0
       ? 'Auto Build: ' + (s.stage === 'complete' ? 'Complete' : (phaseNames[s.stage] || s.stage) + ' (' + (s.completed + 1) + '/' + s.total + ')')
       : 'Auto Build: Starting...';
