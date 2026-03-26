@@ -13,12 +13,13 @@ from signalforge.data.models import CombinedSignal
 # If only a subset of engines report, the combiner re-normalises on the fly.
 # ---------------------------------------------------------------------------
 DEFAULT_WEIGHTS: dict[str, float] = {
-    "kronos": 0.40,
+    "lstm": 0.25,
+    "gbm": 0.20,
     "technical": 0.15,
-    "chronos": 0.15,
     "qlib": 0.15,
-    "sentiment": 0.10,
-    "agents": 0.05,
+    "chronos": 0.15,
+    "agents": 0.10,
+    "kronos": 0.00,
 }
 
 

@@ -129,12 +129,13 @@ class TestAllEnginesPipeline:
     """Test the full pipeline with all engines enabled (fallback mode)."""
 
     def test_all_engines_stock(self, ohlcv_stock_df: pd.DataFrame) -> None:
-        """Run all 5 engines on stock data and combine."""
-        from signalforge.config import QlibConfig, ChronosConfig, AgentsConfig
+        """Run all engines on stock data and combine."""
+        from signalforge.config import QlibConfig, AgentsConfig
         from signalforge.engines.kronos_engine import KronosConfig, KronosEngine
         from signalforge.engines.qlib_engine import QlibEngine
-        from signalforge.engines.chronos_engine import ChronosEngine
         from signalforge.engines.agents_engine import AgentsEngine
+        from signalforge.engines.lstm_engine import LSTMConfig, LSTMEngine
+        from signalforge.engines.gbm_engine import GBMConfig, GBMEnsembleEngine
         from signalforge.engines.technical import compute_signals, compute_support_resistance
         from signalforge.ensemble.combiner import SignalCombiner
         from signalforge.ensemble.targets import TargetCalculator
@@ -142,30 +143,23 @@ class TestAllEnginesPipeline:
 
         current_price = float(ohlcv_stock_df["close"].iloc[-1])
 
-        # Run all 5 engines
-        kronos = KronosEngine(KronosConfig(pred_len=5))
-        kronos_pred = kronos.predict(ohlcv_stock_df, pred_len=5)
-
+        # Run engines
         qlib = QlibEngine(QlibConfig(enabled=True))
         qlib_pred = qlib.predict(ohlcv_stock_df, pred_len=5)
-
-        chronos = ChronosEngine(ChronosConfig(enabled=True))
-        chronos_pred = chronos.predict(ohlcv_stock_df, pred_len=5)
 
         agents = AgentsEngine(AgentsConfig(enabled=True))
         agents_pred = agents.predict(ohlcv_stock_df, pred_len=5)
 
+        lstm = LSTMEngine(LSTMConfig(epochs=5, lookback=20, hidden_size=16, mc_samples=3))
+        lstm_pred = lstm.predict(ohlcv_stock_df, pred_len=5)
+
+        gbm = GBMEnsembleEngine(GBMConfig(n_estimators=20))
+        gbm_pred = gbm.predict(ohlcv_stock_df, pred_len=5)
+
         signals_df = compute_signals(ohlcv_stock_df)
         supports, resistances = compute_support_resistance(ohlcv_stock_df)
 
-        # Combine all results
-        engine_results = {
-            "kronos": {
-                "predicted_close": float(kronos_pred["close"].iloc[-1]),
-                "predicted_high": float(kronos_pred["high"].max()),
-                "predicted_low": float(kronos_pred["low"].min()),
-                "current_price": current_price,
-            },
+        engine_results: dict[str, dict] = {
             "technical": {
                 "signal": float(signals_df["signal_strength"].iloc[-1]),
                 "support": supports[0],
@@ -183,11 +177,21 @@ class TestAllEnginesPipeline:
                 "current_price": current_price,
             }
 
-        if not chronos_pred.empty and "predicted_close" in chronos_pred.columns:
-            engine_results["chronos"] = {
-                "predicted_close": float(chronos_pred["predicted_close"].iloc[-1]),
-                "predicted_high": float(chronos_pred["predicted_high"].max()),
-                "predicted_low": float(chronos_pred["predicted_low"].min()),
+        if not lstm_pred.empty:
+            engine_results["lstm"] = {
+                "predicted_close": float(lstm_pred["close"].iloc[-1]),
+                "predicted_high": float(lstm_pred["high"].max()),
+                "predicted_low": float(lstm_pred["low"].min()),
+                "current_price": current_price,
+            }
+
+        if not gbm_pred.empty and "predicted_return" in gbm_pred.columns:
+            pred_ret = float(gbm_pred["predicted_return"].iloc[-1])
+            pred_close = current_price * (1 + pred_ret)
+            engine_results["gbm"] = {
+                "predicted_close": pred_close,
+                "predicted_high": pred_close * 1.02,
+                "predicted_low": pred_close * 0.98,
                 "current_price": current_price,
             }
 
@@ -196,17 +200,10 @@ class TestAllEnginesPipeline:
                 "signal": float(agents_pred["direction"].iloc[-1]),
             }
 
-        # Must have at least 3 engines reporting
-        assert len(engine_results) >= 3, f"Only {len(engine_results)} engines reported"
+        # Must have at least 4 engines reporting
+        assert len(engine_results) >= 4, f"Only {len(engine_results)} engines reported"
 
-        weights = {
-            "kronos": 0.40,
-            "qlib": 0.20,
-            "chronos": 0.15,
-            "agents": 0.10,
-            "technical": 0.15,
-        }
-        combiner = SignalCombiner(weights)
+        combiner = SignalCombiner()
         combined = combiner.combine(engine_results)
 
         assert -1.0 <= combined.direction <= 1.0

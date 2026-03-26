@@ -68,20 +68,46 @@ class ChronosConfig:
 @dataclass(frozen=True)
 class AgentsConfig:
     enabled: bool = False
-    llm_provider: str = "anthropic"
-    deep_think_model: str = "claude-sonnet-4-6"
-    quick_think_model: str = "claude-haiku-4-5-20251001"
+    llm_provider: str = "gemini"
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.3
     max_debate_rounds: int = 1
     max_risk_rounds: int = 1
 
 
 @dataclass(frozen=True)
+class LSTMConfig:
+    enabled: bool = False
+    hidden_size: int = 64
+    num_layers: int = 2
+    dropout: float = 0.2
+    lookback: int = 60
+    epochs: int = 50
+    lr: float = 1e-3
+    mc_samples: int = 20
+    device: str = "cuda"
+
+
+@dataclass(frozen=True)
+class GBMConfig:
+    enabled: bool = False
+    n_estimators: int = 200
+    max_depth: int = 6
+    learning_rate: float = 0.05
+    label_horizon: int = 5
+    feature_windows: tuple[int, ...] = (5, 10, 20, 40)
+    min_train_rows: int = 60
+
+
+@dataclass(frozen=True)
 class EnsembleConfig:
-    kronos_weight: float = 0.35
-    qlib_weight: float = 0.20
+    kronos_weight: float = 0.00
+    qlib_weight: float = 0.15
     chronos_weight: float = 0.15
     agents_weight: float = 0.10
-    technical_weight: float = 0.20
+    technical_weight: float = 0.15
+    lstm_weight: float = 0.25
+    gbm_weight: float = 0.20
 
 
 @dataclass(frozen=True)
@@ -116,6 +142,8 @@ class Config:
     qlib: QlibConfig = field(default_factory=QlibConfig)
     chronos: ChronosConfig = field(default_factory=ChronosConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
+    lstm: LSTMConfig = field(default_factory=LSTMConfig)
+    gbm: GBMConfig = field(default_factory=GBMConfig)
     ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
     output_format: str = "table"
     confidence_threshold: float = 0.3
@@ -197,11 +225,34 @@ def load_config(config_path: str | Path | None = None) -> Config:
     agents_raw = engines.get("trading_agents", {})
     agents_cfg = AgentsConfig(
         enabled=agents_raw.get("enabled", False),
-        llm_provider=agents_raw.get("llm_provider", "anthropic"),
-        deep_think_model=agents_raw.get("deep_think_model", "claude-sonnet-4-6"),
-        quick_think_model=agents_raw.get("quick_think_model", "claude-haiku-4-5-20251001"),
+        llm_provider=agents_raw.get("llm_provider", "gemini"),
+        model=agents_raw.get("model", "gemini-2.5-flash"),
+        temperature=agents_raw.get("temperature", 0.3),
         max_debate_rounds=agents_raw.get("max_debate_rounds", 1),
         max_risk_rounds=agents_raw.get("max_risk_discuss_rounds", 1),
+    )
+
+    lstm_raw = engines.get("lstm", {})
+    lstm_cfg = LSTMConfig(
+        enabled=lstm_raw.get("enabled", False),
+        hidden_size=lstm_raw.get("hidden_size", 64),
+        num_layers=lstm_raw.get("num_layers", 2),
+        dropout=lstm_raw.get("dropout", 0.2),
+        lookback=lstm_raw.get("lookback", 60),
+        epochs=lstm_raw.get("epochs", 50),
+        lr=lstm_raw.get("lr", 1e-3),
+        mc_samples=lstm_raw.get("mc_samples", 20),
+        device=lstm_raw.get("device", "cuda"),
+    )
+
+    gbm_raw = engines.get("gbm", {})
+    gbm_cfg = GBMConfig(
+        enabled=gbm_raw.get("enabled", False),
+        n_estimators=gbm_raw.get("n_estimators", 200),
+        max_depth=gbm_raw.get("max_depth", 6),
+        learning_rate=gbm_raw.get("learning_rate", 0.05),
+        label_horizon=gbm_raw.get("label_horizon", 5),
+        min_train_rows=gbm_raw.get("min_train_rows", 60),
     )
 
     stocks_data = data_raw.get("stocks", {})
@@ -228,11 +279,13 @@ def load_config(config_path: str | Path | None = None) -> Config:
     )
 
     ensemble = EnsembleConfig(
-        kronos_weight=ensemble_raw.get("kronos_weight", 0.40),
-        qlib_weight=ensemble_raw.get("qlib_weight", 0.20),
-        chronos_weight=ensemble_raw.get("chronos_weight", 0.15),
-        agents_weight=ensemble_raw.get("agents_weight", 0.10),
+        kronos_weight=ensemble_raw.get("kronos_weight", 0.25),
+        qlib_weight=ensemble_raw.get("qlib_weight", 0.15),
+        chronos_weight=ensemble_raw.get("chronos_weight", 0.10),
+        agents_weight=ensemble_raw.get("agents_weight", 0.05),
         technical_weight=ensemble_raw.get("technical_weight", 0.15),
+        lstm_weight=ensemble_raw.get("lstm_weight", 0.15),
+        gbm_weight=ensemble_raw.get("gbm_weight", 0.15),
     )
 
     home = str(Path.home())
@@ -249,6 +302,8 @@ def load_config(config_path: str | Path | None = None) -> Config:
         qlib=qlib_cfg,
         chronos=chronos_cfg,
         agents=agents_cfg,
+        lstm=lstm_cfg,
+        gbm=gbm_cfg,
         ensemble=ensemble,
         output_format=output_raw.get("format", "table"),
         confidence_threshold=output_raw.get("confidence_threshold", 0.3),

@@ -43,10 +43,7 @@ dependencies = [
 [project.optional-dependencies]
 qlib = ["pyqlib>=0.9.6"]
 agents = [
-    "tradingagents>=0.2.0",
-    "langchain-core>=0.3",
-    "langchain-openai",
-    "langchain-anthropic",
+    "google-genai>=1.0",
 ]
 chronos = ["chronos-forecasting>=1.0"]
 backtest = ["vectorbt>=0.26"]

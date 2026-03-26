@@ -34,7 +34,7 @@ def scan(
     interval: str = typer.Option("1d", "--interval", "-i", help="Data interval (1d, 1h, etc.)"),
     pred_len: int = typer.Option(5, "--horizon", "-h", help="Prediction horizon in bars"),
     output_format: str = typer.Option("table", "--format", "-f", help="Output: table, json, csv"),
-    engine: str = typer.Option("all", "--engine", "-e", help="Engine: kronos, technical, all"),
+    engine: str = typer.Option("all", "--engine", "-e", help="Engine: kronos, qlib, chronos, agents, lstm, gbm, technical, all"),
 ) -> None:
     """Scan assets and generate buy/sell signals with price targets."""
     from signalforge.config import load_config
@@ -214,20 +214,26 @@ def setup() -> None:
             "git clone https://github.com/shiyu-coder/Kronos && pip install -r Kronos/requirements.txt"
         )
 
-    # Check Phase 2 dependencies
-    phase2_checks = {
+    # Check ML engine dependencies
+    ml_checks = {
         "qlib": "pip install pyqlib",
         "chronos": "pip install chronos-forecasting",
+        "lightgbm": "pip install lightgbm",
         "tradingagents": "pip install tradingagents",
         "rdagent": "pip install rdagent",
     }
-    console.print("\n[bold]Phase 2+ Dependencies:[/bold]")
-    for module, install_cmd in phase2_checks.items():
+    console.print("\n[bold]ML Engine Dependencies:[/bold]")
+    for module, install_cmd in ml_checks.items():
         try:
             __import__(module)
             console.print(f"  [green]OK[/green] {module}")
         except ImportError:
             console.print(f"  [yellow]OPTIONAL[/yellow] {module} → {install_cmd}")
+
+    # Built-in ML engines (always available via PyTorch/sklearn)
+    console.print("\n[bold]Built-in ML Engines:[/bold]")
+    console.print("  [green]OK[/green] LSTM (PyTorch seq2seq)")
+    console.print("  [green]OK[/green] GBM (LightGBM or sklearn fallback)")
 
     console.print("\n[bold green]Setup complete![/bold green]")
 

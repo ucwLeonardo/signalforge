@@ -1,13 +1,19 @@
-"""TradingAgents multi-agent LLM analysis engine.
+"""LLM-powered multi-analyst trading signal engine.
 
-Wraps TauricResearch/TradingAgents for qualitative multi-agent analysis.
-If the ``tradingagents`` package is not available on the Python path the
-engine falls back to a simple rule-based sentiment derived from price action
-so that SignalForge remains usable without LLM API keys configured.
+Uses Google Gemini to run a structured multi-perspective analysis:
+  1. Technical Analyst — reads indicators and chart patterns
+  2. Fundamental Analyst — evaluates valuation and macro context
+  3. Sentiment Analyst — gauges market mood from price action
+  4. Risk Manager — identifies downside risks
+  5. Decision Synthesiser — combines all views into a final verdict
+
+Falls back to a rule-based price-action heuristic when no LLM API key
+is available (``GEMINI_API_KEY`` not set).
 """
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -19,24 +25,43 @@ from loguru import logger
 from signalforge.engines.base import PredictionEngine
 
 # ---------------------------------------------------------------------------
-# TradingAgents lazy import
+# Gemini lazy import (new google-genai SDK)
 # ---------------------------------------------------------------------------
 
-_TRADING_AGENTS_AVAILABLE: bool = False
+_GEMINI_AVAILABLE: bool = False
+_genai_client: Any = None
 
 try:
-    from tradingagents.graph.trading_graph import TradingAgentsGraph  # type: ignore[import-untyped]
+    from google import genai  # type: ignore[import-untyped]
+    from google.genai import types as genai_types  # type: ignore[import-untyped]
 
-    _TRADING_AGENTS_AVAILABLE = True
-    logger.info(
-        "TradingAgents library detected -- multi-agent LLM analysis available."
-    )
+    _api_key = os.environ.get("GEMINI_API_KEY", "")
+    if _api_key:
+        _genai_client = genai.Client(api_key=_api_key)
+        _GEMINI_AVAILABLE = True
+        logger.info("Gemini API (google-genai) configured -- LLM-powered analysis available.")
+    else:
+        logger.warning(
+            "GEMINI_API_KEY not set. Falling back to rule-based sentiment."
+        )
 except ImportError:
-    logger.warning(
-        "TradingAgents library not found. Install it with:\n"
-        "  pip install tradingagents\n"
-        "Falling back to rule-based price-action sentiment."
-    )
+    try:
+        # Fallback to old deprecated SDK
+        import google.generativeai as genai_old  # type: ignore[import-untyped]
+
+        _api_key = os.environ.get("GEMINI_API_KEY", "")
+        if _api_key:
+            genai_old.configure(api_key=_api_key)
+            _GEMINI_AVAILABLE = True
+            logger.info("Gemini API (legacy SDK) configured.")
+        else:
+            logger.warning("GEMINI_API_KEY not set. Falling back to rule-based sentiment.")
+    except ImportError:
+        logger.warning(
+            "google-genai not installed. Install with:\n"
+            "  pip install google-genai\n"
+            "Falling back to rule-based price-action sentiment."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -46,24 +71,21 @@ except ImportError:
 
 @dataclass(frozen=True)
 class AgentsConfig:
-    """All tuneable knobs for :class:`AgentsEngine`.
+    """Tuneable knobs for :class:`AgentsEngine`.
 
     Attributes:
         enabled: Whether the agents engine is active.
-        llm_provider: LLM backend -- ``"openai"``, ``"anthropic"``,
-            ``"google"``, or ``"ollama"``.
-        deep_think_model: Model identifier for complex reasoning tasks
-            (debate synthesis, risk assessment).
-        quick_think_model: Model identifier for lighter tasks (individual
-            analyst reports, quick summaries).
-        max_debate_rounds: Maximum rounds of bull/bear debate.
-        max_risk_rounds: Maximum rounds of risk-assessment refinement.
+        llm_provider: LLM backend (currently ``"gemini"``).
+        model: Gemini model identifier.
+        temperature: Sampling temperature for generation.
+        max_debate_rounds: Number of rounds for the synthesiser to refine.
+        max_risk_rounds: Number of risk-assessment refinement rounds.
     """
 
     enabled: bool = False
-    llm_provider: str = "anthropic"
-    deep_think_model: str = "claude-sonnet-4-6"
-    quick_think_model: str = "claude-haiku-4-5-20251001"
+    llm_provider: str = "gemini"
+    model: str = "gemini-2.5-flash"
+    temperature: float = 0.3
     max_debate_rounds: int = 1
     max_risk_rounds: int = 1
 
@@ -72,33 +94,239 @@ class AgentsConfig:
 # Decision mapping
 # ---------------------------------------------------------------------------
 
-# Ordered longest-first so "STRONG BUY" matches before "BUY", etc.
 _DECISION_SCORE: tuple[tuple[str, float], ...] = (
     ("STRONG BUY", +0.9),
     ("STRONG SELL", -0.9),
-    ("OVERWEIGHT", +0.4),
-    ("UNDERWEIGHT", -0.4),
-    ("BUY", +0.8),
-    ("SELL", -0.8),
+    ("BUY", +0.7),
+    ("SELL", -0.7),
     ("HOLD", 0.0),
 )
 
 
 def _parse_decision_score(decision: str) -> float:
-    """Map a TradingAgents decision string to a numeric direction score."""
+    """Map a decision string to a numeric direction score."""
     normalised = decision.strip().upper()
     for key, score in _DECISION_SCORE:
         if key in normalised:
             return score
-    logger.warning(
-        "Unrecognised TradingAgents decision '{}'; defaulting to HOLD (0.0)",
-        decision,
-    )
+    logger.warning("Unrecognised decision '{}'; defaulting to HOLD (0.0)", decision)
     return 0.0
 
 
 # ---------------------------------------------------------------------------
-# Fallback indicators (pure numpy / pandas)
+# Market data summary builder
+# ---------------------------------------------------------------------------
+
+
+def _build_market_summary(df: pd.DataFrame) -> str:
+    """Build a concise market data summary for the LLM prompt."""
+    close = df["close"].astype(np.float64)
+    high = df["high"].astype(np.float64)
+    low = df["low"].astype(np.float64)
+    volume = df["volume"].astype(np.float64)
+
+    current = float(close.iloc[-1])
+    ret_1d = float((close.iloc[-1] / close.iloc[-2] - 1) * 100) if len(close) > 1 else 0
+    ret_5d = float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) > 5 else 0
+    ret_20d = float((close.iloc[-1] / close.iloc[-21] - 1) * 100) if len(close) > 20 else 0
+
+    high_52w = float(high.tail(252).max()) if len(high) >= 252 else float(high.max())
+    low_52w = float(low.tail(252).min()) if len(low) >= 252 else float(low.min())
+    avg_vol_20 = float(volume.tail(20).mean())
+
+    # RSI
+    delta = close.diff()
+    gain = delta.clip(lower=0.0).ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    loss = (-delta).clip(lower=0.0).ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    rsi = float(100 - 100 / (1 + gain.iloc[-1] / (loss.iloc[-1] + 1e-12)))
+
+    # MACD
+    ema12 = close.ewm(span=12).mean()
+    ema26 = close.ewm(span=26).mean()
+    macd = float((ema12.iloc[-1] - ema26.iloc[-1]))
+    macd_signal = float((ema12 - ema26).ewm(span=9).mean().iloc[-1])
+
+    # Bollinger
+    ma20 = float(close.rolling(20).mean().iloc[-1])
+    std20 = float(close.rolling(20).std().iloc[-1])
+    bb_upper = ma20 + 2 * std20
+    bb_lower = ma20 - 2 * std20
+
+    # Volatility
+    log_ret = np.log(close / close.shift(1)).dropna()
+    vol_20d = float(log_ret.tail(20).std() * np.sqrt(252) * 100)
+
+    return f"""MARKET DATA SUMMARY:
+- Current Price: ${current:.2f}
+- 1-Day Return: {ret_1d:+.2f}%
+- 5-Day Return: {ret_5d:+.2f}%
+- 20-Day Return: {ret_20d:+.2f}%
+- 52-Week High: ${high_52w:.2f} ({(current/high_52w-1)*100:+.1f}% from high)
+- 52-Week Low: ${low_52w:.2f} ({(current/low_52w-1)*100:+.1f}% from low)
+- 20-Day Avg Volume: {avg_vol_20:,.0f}
+- RSI(14): {rsi:.1f}
+- MACD: {macd:.3f} (Signal: {macd_signal:.3f}, Histogram: {macd-macd_signal:.3f})
+- Bollinger Bands: Lower=${bb_lower:.2f} | MA20=${ma20:.2f} | Upper=${bb_upper:.2f}
+- 20-Day Annualised Volatility: {vol_20d:.1f}%
+
+RECENT PRICE ACTION (last 10 days):"""
+
+
+def _recent_prices(df: pd.DataFrame, n: int = 10) -> str:
+    """Format last N daily candles."""
+    tail = df.tail(n)
+    lines = []
+    for _, row in tail.iterrows():
+        date = str(row.get("timestamp", row.name))[:10]
+        lines.append(
+            f"  {date}: O=${row['open']:.2f} H=${row['high']:.2f} "
+            f"L=${row['low']:.2f} C=${row['close']:.2f} V={row['volume']:,.0f}"
+        )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# LLM analysis via Gemini
+# ---------------------------------------------------------------------------
+
+
+_SINGLE_ANALYST_PROMPT = """You are a multi-perspective trading analyst. Analyse the following market data from four perspectives, then synthesise a final trading decision.
+
+{market_data}
+
+Analyse from these four perspectives:
+
+1. TECHNICAL: Trend direction, support/resistance, momentum, chart patterns.
+2. FUNDAMENTAL: Price vs historical range, valuation context, macro environment.
+3. SENTIMENT: Volume patterns, RSI extremes, volatility, fear/greed.
+4. RISK: Downside risk, volatility regime, position sizing.
+
+Then combine all perspectives into one final decision.
+
+Respond in this EXACT format:
+TECHNICAL: [1 sentence]
+FUNDAMENTAL: [1 sentence]
+SENTIMENT: [1 sentence]
+RISK: [1 sentence]
+DECISION: [STRONG BUY / BUY / HOLD / SELL / STRONG SELL]
+CONFIDENCE: [0.0 to 1.0]
+RATIONALE: [1-2 sentence rationale combining key factors]"""
+
+
+def _call_gemini(
+    prompt: str,
+    model_name: str,
+    temperature: float,
+    max_retries: int = 3,
+) -> str:
+    """Call Gemini API with retries.  Uses the new google-genai SDK when
+    available, falling back to the legacy google.generativeai SDK."""
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            if _genai_client is not None:
+                # New google-genai SDK
+                response = _genai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        temperature=temperature,
+                        max_output_tokens=500,
+                    ),
+                )
+                return response.text or ""
+            else:
+                # Legacy google.generativeai SDK
+                import google.generativeai as genai_old  # type: ignore[import-untyped]
+
+                model = genai_old.GenerativeModel(
+                    model_name,
+                    safety_settings={
+                        "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                        "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                        "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+                        "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+                    },
+                )
+                response = model.generate_content(
+                    prompt,
+                    generation_config=genai_old.types.GenerationConfig(
+                        temperature=temperature,
+                        max_output_tokens=500,
+                    ),
+                )
+                return response.text or ""
+        except Exception as exc:
+            last_exc = exc
+            exc_str = str(exc).lower()
+            transient = any(
+                tok in exc_str for tok in ("rate", "limit", "429", "503", "overloaded", "timeout")
+            )
+            if not transient or attempt == max_retries:
+                raise
+            wait = 2.0 ** attempt
+            logger.warning("Gemini call failed (attempt {}/{}): {}. Retrying in {:.0f}s", attempt, max_retries, exc, wait)
+            time.sleep(wait)
+
+    raise last_exc  # type: ignore[misc]
+
+
+def _parse_response(text: str, field: str) -> str:
+    """Extract a field value from structured LLM response."""
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if line.upper().startswith(field.upper() + ":"):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _run_gemini_analysis(
+    df: pd.DataFrame,
+    config: AgentsConfig,
+) -> dict[str, Any]:
+    """Run consolidated single-call Gemini analysis.
+
+    Uses one prompt with all 4 analyst perspectives + synthesis to stay
+    within free-tier rate limits (5 req/min).
+    """
+    market_data = _build_market_summary(df) + "\n" + _recent_prices(df)
+    prompt = _SINGLE_ANALYST_PROMPT.format(market_data=market_data)
+
+    try:
+        response_text = _call_gemini(prompt, config.model, config.temperature)
+        logger.debug("Gemini analysis responded ({} chars)", len(response_text))
+    except Exception as exc:
+        logger.error("Gemini analysis failed: {}", exc)
+        return {
+            "direction": 0.0,
+            "confidence": 0.3,
+            "rationale": f"Gemini analysis unavailable: {exc}",
+            "raw_response": "",
+        }
+
+    decision = _parse_response(response_text, "DECISION") or "HOLD"
+    confidence_str = _parse_response(response_text, "CONFIDENCE")
+    rationale = _parse_response(response_text, "RATIONALE") or "No rationale."
+
+    try:
+        confidence = float(confidence_str)
+        confidence = max(0.0, min(1.0, confidence))
+    except (ValueError, TypeError):
+        confidence = 0.5
+
+    direction = _parse_decision_score(decision)
+
+    return {
+        "direction": direction,
+        "confidence": round(confidence, 4),
+        "rationale": f"[Gemini {config.model}] {decision}: {rationale}",
+        "raw_response": response_text,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fallback: rule-based price-action sentiment
 # ---------------------------------------------------------------------------
 
 
@@ -107,31 +335,15 @@ def _rsi(series: pd.Series, length: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0.0)
     loss = (-delta).clip(lower=0.0)
-    avg_gain = gain.ewm(
-        alpha=1.0 / length, min_periods=length, adjust=False
-    ).mean()
-    avg_loss = loss.ewm(
-        alpha=1.0 / length, min_periods=length, adjust=False
-    ).mean()
+    avg_gain = gain.ewm(alpha=1.0 / length, min_periods=length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / length, min_periods=length, adjust=False).mean()
     rs = avg_gain / (avg_loss + 1e-12)
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def _price_action_sentiment(
-    df: pd.DataFrame,
-) -> dict[str, Any]:
-    """Derive a simple sentiment signal from recent price action.
-
-    Rules
-    -----
-    * 5-day return > +3 % **and** RSI < 70  =>  bullish  (+0.6)
-    * 5-day return < -3 % **and** RSI > 30  =>  bearish  (-0.6)
-    * Otherwise                              =>  neutral  ( 0.0)
-
-    Returns a dict with ``direction``, ``confidence``, and ``rationale``.
-    """
-    close = df["close"] if "close" in df.columns else df["Close"]
-    close = close.astype(np.float64)
+def _price_action_sentiment(df: pd.DataFrame) -> dict[str, Any]:
+    """Simple rule-based sentiment fallback."""
+    close = df["close"].astype(np.float64)
 
     if len(close) < 15:
         return {
@@ -156,129 +368,15 @@ def _price_action_sentiment(
 
     confidence = min(abs(ret_5d) / 10.0, 1.0) * 0.5 + 0.1
 
-    rationale = (
-        f"Price-action fallback: {label}. "
-        f"5d return={ret_5d:+.2f}%, RSI(14)={current_rsi:.1f}. "
-        f"(TradingAgents unavailable -- using rule-based heuristic.)"
-    )
-
     return {
         "direction": direction,
         "confidence": round(confidence, 4),
-        "rationale": rationale,
+        "rationale": (
+            f"Price-action fallback: {label}. "
+            f"5d return={ret_5d:+.2f}%, RSI(14)={current_rsi:.1f}. "
+            f"(Gemini API unavailable -- using rule-based heuristic.)"
+        ),
     }
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-_REPORT_KEYS: tuple[str, ...] = (
-    "market_report",
-    "sentiment_report",
-    "news_report",
-    "fundamentals_report",
-)
-
-
-def _extract_rationale(final_state: dict[str, Any]) -> str:
-    """Combine key analyst findings from the TradingAgents final state."""
-    parts: list[str] = []
-
-    for key in _REPORT_KEYS:
-        report = final_state.get(key)
-        if report and isinstance(report, str):
-            # Take the first meaningful paragraph (up to ~300 chars)
-            snippet = report.strip()[:300]
-            if snippet:
-                parts.append(f"[{key}] {snippet}")
-
-    # Include debate judge decision if present
-    debate = final_state.get("investment_debate_state")
-    if isinstance(debate, dict):
-        judge = debate.get("judge_decision")
-        if judge and isinstance(judge, str):
-            parts.append(f"[debate_judge] {judge.strip()[:300]}")
-
-    # Include final trade decision text
-    decision_text = final_state.get("final_trade_decision")
-    if decision_text and isinstance(decision_text, str):
-        parts.append(f"[final_decision] {decision_text.strip()[:300]}")
-
-    if not parts:
-        return "No detailed analyst reports available."
-    return "\n".join(parts)
-
-
-def _extract_analyst_reports(final_state: dict[str, Any]) -> dict[str, str]:
-    """Pull individual analyst reports out of the TradingAgents state."""
-    reports: dict[str, str] = {}
-    for key in _REPORT_KEYS:
-        value = final_state.get(key)
-        if value and isinstance(value, str):
-            reports[key] = value
-
-    # Include structured sub-reports
-    for nested_key, sub_keys in (
-        ("investment_debate_state", ("judge_decision", "current_response")),
-        ("risk_debate_state", ("judge_decision",)),
-    ):
-        nested = final_state.get(nested_key)
-        if isinstance(nested, dict):
-            for sk in sub_keys:
-                val = nested.get(sk)
-                if val and isinstance(val, str):
-                    reports[f"{nested_key}.{sk}"] = val
-
-    plan = final_state.get("investment_plan")
-    if plan and isinstance(plan, str):
-        reports["investment_plan"] = plan
-
-    return reports
-
-
-def _call_with_retries(
-    fn: Any,
-    *args: Any,
-    max_retries: int = 3,
-    backoff_base: float = 2.0,
-    **kwargs: Any,
-) -> Any:
-    """Call *fn* with exponential-backoff retries on transient errors."""
-    last_exc: Exception | None = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            return fn(*args, **kwargs)
-        except KeyboardInterrupt:
-            raise
-        except Exception as exc:
-            last_exc = exc
-            # Only retry on likely-transient errors (rate limits, timeouts)
-            exc_str = str(exc).lower()
-            transient = any(
-                tok in exc_str
-                for tok in ("rate", "limit", "timeout", "429", "503", "overloaded")
-            )
-            if not transient or attempt == max_retries:
-                logger.error(
-                    "TradingAgents call failed (attempt {}/{}): {}",
-                    attempt,
-                    max_retries,
-                    exc,
-                )
-                raise
-            wait = backoff_base**attempt
-            logger.warning(
-                "Transient error on attempt {}/{}: {}. Retrying in {:.1f}s ...",
-                attempt,
-                max_retries,
-                exc,
-                wait,
-            )
-            time.sleep(wait)
-    # Unreachable, but satisfies the type checker
-    raise last_exc  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -287,13 +385,11 @@ def _call_with_retries(
 
 
 class AgentsEngine(PredictionEngine):
-    """Prediction engine backed by TauricResearch/TradingAgents.
+    """Multi-analyst LLM trading signal engine powered by Google Gemini.
 
-    When the ``tradingagents`` library is importable the engine spins up a
-    multi-agent LLM pipeline (fundamental, sentiment, news, technical
-    analysts + risk manager + debate) and converts the qualitative verdict
-    into a numeric signal.  Otherwise it transparently falls back to a
-    simple rule-based price-action heuristic.
+    Runs a structured multi-perspective analysis using Gemini, with four
+    specialised analyst prompts and a decision synthesiser.  Falls back to
+    rule-based price-action sentiment when no API key is available.
     """
 
     def __init__(
@@ -310,18 +406,15 @@ class AgentsEngine(PredictionEngine):
                 }
             )
         self._config = cfg
-        self._graph: Any | None = None  # lazy-loaded
 
         logger.debug(
-            "AgentsEngine initialised (tradingagents_available={}, provider={})",
-            _TRADING_AGENTS_AVAILABLE,
-            cfg.llm_provider,
+            "AgentsEngine initialised (gemini_available={}, model={})",
+            _GEMINI_AVAILABLE,
+            cfg.model,
         )
 
-    # -- public API ---------------------------------------------------------
-
     @property
-    def name(self) -> str:  # noqa: D401
+    def name(self) -> str:
         return "agents"
 
     @property
@@ -329,148 +422,32 @@ class AgentsEngine(PredictionEngine):
         return self._config
 
     @property
-    def is_agents_available(self) -> bool:
-        return _TRADING_AGENTS_AVAILABLE and self._config.enabled
-
-    # ---- predict ----------------------------------------------------------
+    def is_gemini_available(self) -> bool:
+        return _GEMINI_AVAILABLE
 
     def predict(
         self,
         df: pd.DataFrame,
         pred_len: int = 1,
     ) -> pd.DataFrame:
-        """Generate a qualitative directional signal from price history.
+        """Generate a directional signal via Gemini multi-analyst pipeline.
 
-        Parameters
-        ----------
-        df:
-            Historical OHLCV dataframe (must contain ``close`` at minimum).
-        pred_len:
-            Number of forward periods the signal applies to (used only for
-            labelling; the analysis itself is a single-shot assessment).
-
-        Returns
-        -------
-        pd.DataFrame
-            A single-row (or *pred_len*-row) DataFrame with columns:
-            ``direction`` (-1..1), ``confidence`` (0..1), ``rationale`` (str).
+        Returns a DataFrame with columns:
+        ``direction`` (-1..1), ``confidence`` (0..1), ``rationale`` (str).
         """
-        if self.is_agents_available:
-            # Attempt to infer symbol from dataframe metadata
-            symbol = getattr(df, "name", None) or df.attrs.get("symbol", "UNKNOWN")
-            date_str = str(pd.Timestamp.now().date())
-            if hasattr(df.index, "max") and isinstance(
-                df.index, pd.DatetimeIndex
-            ):
-                date_str = str(df.index.max().date())
-
+        if _GEMINI_AVAILABLE and self._config.enabled:
             try:
-                result = self.analyze(str(symbol), date_str)
+                result = _run_gemini_analysis(df, self._config)
                 signal = {
                     "direction": result["direction"],
                     "confidence": result["confidence"],
                     "rationale": result["rationale"],
                 }
             except Exception as exc:
-                logger.error(
-                    "TradingAgents analysis failed, falling back: {}", exc
-                )
+                logger.error("Gemini analysis failed, falling back: {}", exc)
                 signal = _price_action_sentiment(df)
         else:
             signal = _price_action_sentiment(df)
 
         rows = [signal] * pred_len
         return pd.DataFrame(rows)
-
-    # ---- analyze ----------------------------------------------------------
-
-    def analyze(
-        self,
-        symbol: str,
-        date: str,
-    ) -> dict[str, Any]:
-        """Run the full TradingAgents multi-agent pipeline.
-
-        Parameters
-        ----------
-        symbol:
-            Ticker or asset identifier (e.g. ``"AAPL"``, ``"BTCUSDT"``).
-        date:
-            Trade date in ISO format (``"YYYY-MM-DD"``).
-
-        Returns
-        -------
-        dict
-            Keys: ``decision``, ``direction``, ``confidence``,
-            ``rationale``, ``analyst_reports``.
-
-        Raises
-        ------
-        RuntimeError
-            If TradingAgents is not installed or not enabled.
-        """
-        if not _TRADING_AGENTS_AVAILABLE:
-            raise RuntimeError(
-                "TradingAgents is not installed. "
-                "Install with: pip install tradingagents"
-            )
-        if not self._config.enabled:
-            raise RuntimeError(
-                "AgentsEngine is disabled. Set enabled=True in AgentsConfig."
-            )
-
-        graph = self._load_graph()
-
-        logger.info(
-            "Running TradingAgents analysis for {} on {} ...", symbol, date
-        )
-        final_state, decision = _call_with_retries(
-            graph.propagate, symbol, date
-        )
-
-        direction = _parse_decision_score(decision)
-        confidence = min(abs(direction) + 0.2, 1.0)
-        rationale = _extract_rationale(final_state)
-        analyst_reports = _extract_analyst_reports(final_state)
-
-        logger.info(
-            "TradingAgents verdict for {}: {} (direction={:+.2f})",
-            symbol,
-            decision,
-            direction,
-        )
-
-        return {
-            "decision": decision,
-            "direction": direction,
-            "confidence": round(confidence, 4),
-            "rationale": rationale,
-            "analyst_reports": analyst_reports,
-        }
-
-    # -- private helpers ----------------------------------------------------
-
-    def _load_graph(self) -> Any:
-        """Lazy-load the TradingAgentsGraph with configured models."""
-        if self._graph is not None:
-            return self._graph
-
-        logger.info(
-            "Initialising TradingAgentsGraph (provider={}, deep={}, quick={})",
-            self._config.llm_provider,
-            self._config.deep_think_model,
-            self._config.quick_think_model,
-        )
-
-        config = {
-            "llm_provider": self._config.llm_provider,
-            "deep_think_llm": self._config.deep_think_model,
-            "quick_think_llm": self._config.quick_think_model,
-            "max_debate_rounds": self._config.max_debate_rounds,
-            "max_risk_discuss_rounds": self._config.max_risk_rounds,
-        }
-
-        self._graph = TradingAgentsGraph(config=config)
-
-        logger.info("TradingAgentsGraph ready.")
-        return self._graph

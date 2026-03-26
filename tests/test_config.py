@@ -21,7 +21,7 @@ class TestConfig:
 
     def test_kronos_config(self) -> None:
         cfg = load_config()
-        assert cfg.kronos.enabled is True
+        assert cfg.kronos.enabled is False  # Disabled: no real model, weak fallback
         assert cfg.kronos.pred_len > 0
 
     def test_ensemble_weights(self) -> None:
@@ -32,6 +32,8 @@ class TestConfig:
             + cfg.ensemble.chronos_weight
             + cfg.ensemble.agents_weight
             + cfg.ensemble.technical_weight
+            + cfg.ensemble.lstm_weight
+            + cfg.ensemble.gbm_weight
         )
         # Weights should sum to approximately 1.0
         assert 0.9 <= total <= 1.1

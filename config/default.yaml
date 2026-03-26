@@ -80,32 +80,51 @@ data:
 # Prediction engines
 engines:
   kronos:
-    enabled: true
+    enabled: false        # Disabled: no real Kronos model, fallback is weak linear regression
     model: "NeoQuasar/Kronos-base"
     tokenizer: "NeoQuasar/Kronos-Tokenizer-base"
-    pred_len: 5           # Predict 5 candles ahead
-    lookback: 512         # Max context window
+    pred_len: 5
+    lookback: 512
     temperature: 0.8
     top_p: 0.9
-    sample_count: 20      # Ensemble size for confidence
-    device: cuda          # cuda or cpu
+    sample_count: 20
+    device: cuda
 
   qlib:
-    enabled: true         # Falls back to ridge regression if pyqlib not installed
+    enabled: false        # Requires Qlib data bundle (~2GB download). GBM engine covers this.
     model_type: lgbm      # lgbm, lstm, transformer
     features: alpha158
     label_horizon: 5      # 5-day return prediction
 
   chronos:
-    enabled: true         # Falls back to Holt's linear trend if chronos not installed
+    enabled: false        # Disabled: chronos-forecasting SDK version mismatch with bolt models
     model: "amazon/chronos-bolt-base"
     pred_len: 5
 
   trading_agents:
-    enabled: true         # Falls back to rule-based price-action if no API keys
-    llm_provider: anthropic
-    deep_think_model: claude-sonnet-4-6
-    quick_think_model: claude-haiku-4-5-20251001
+    enabled: true         # Gemini-powered multi-analyst LLM analysis
+    llm_provider: gemini
+    model: gemini-2.5-flash
+    temperature: 0.3
+
+  lstm:
+    enabled: true         # LSTM seq2seq trained on-the-fly on asset history
+    hidden_size: 64
+    num_layers: 2
+    dropout: 0.2
+    lookback: 60          # Input sequence length (bars)
+    epochs: 50            # Training epochs per prediction
+    lr: 0.001
+    mc_samples: 20        # MC Dropout samples for confidence
+    device: cuda
+
+  gbm:
+    enabled: true         # Gradient-boosted trees (LightGBM or sklearn fallback)
+    n_estimators: 200
+    max_depth: 6
+    learning_rate: 0.05
+    label_horizon: 5      # Forward return prediction period
+    min_train_rows: 60
 
 # Technical analysis
 technical:
@@ -125,13 +144,16 @@ technical:
     - name: ATR
       period: 14
 
-# Signal ensemble weights
+# Signal ensemble weights (re-normalised on the fly for active engines)
+# Disabled engines (kronos/qlib/chronos) get 0 weight — combiner re-normalises
 ensemble:
-  kronos_weight: 0.40
-  qlib_weight: 0.20
-  chronos_weight: 0.15
+  kronos_weight: 0.00
+  qlib_weight: 0.00
+  chronos_weight: 0.00
   agents_weight: 0.10
-  technical_weight: 0.15
+  technical_weight: 0.20
+  lstm_weight: 0.35
+  gbm_weight: 0.35
 
 # Output settings
 output:

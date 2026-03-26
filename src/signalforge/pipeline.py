@@ -56,6 +56,8 @@ def run_pipeline(
         "chronos": config.ensemble.chronos_weight,
         "agents": config.ensemble.agents_weight,
         "technical": config.ensemble.technical_weight,
+        "lstm": config.ensemble.lstm_weight,
+        "gbm": config.ensemble.gbm_weight,
     }
     combiner = SignalCombiner(weights)
     calculator = TargetCalculator()
@@ -157,6 +159,44 @@ def run_pipeline(
                         }
                 except Exception as e:
                     logger.error(f"TradingAgents failed for {symbol}: {e}")
+
+        # --- LSTM engine ---
+        if engines is None or "lstm" in engines or "all" in engines:
+            if config.lstm.enabled:
+                try:
+                    from signalforge.engines.lstm_engine import LSTMEngine
+
+                    lstm_eng = LSTMEngine(config.lstm)
+                    lstm_pred = lstm_eng.predict(df, pred_len=pred_len)
+                    if not lstm_pred.empty:
+                        engine_results["lstm"] = {
+                            "type": "price",
+                            "predicted_close": float(lstm_pred["close"].iloc[-1]),
+                            "predicted_high": float(lstm_pred["high"].max()),
+                            "predicted_low": float(lstm_pred["low"].min()),
+                        }
+                except Exception as e:
+                    logger.error(f"LSTM failed for {symbol}: {e}")
+
+        # --- GBM ensemble engine ---
+        if engines is None or "gbm" in engines or "all" in engines:
+            if config.gbm.enabled:
+                try:
+                    from signalforge.engines.gbm_engine import GBMEnsembleEngine
+
+                    gbm_eng = GBMEnsembleEngine(config.gbm)
+                    gbm_pred = gbm_eng.predict(df, pred_len=pred_len)
+                    if not gbm_pred.empty and "predicted_return" in gbm_pred.columns:
+                        pred_ret = float(gbm_pred["predicted_return"].iloc[-1])
+                        pred_close = current_price * (1 + pred_ret)
+                        engine_results["gbm"] = {
+                            "type": "price",
+                            "predicted_close": pred_close,
+                            "predicted_high": pred_close * 1.02,
+                            "predicted_low": pred_close * 0.98,
+                        }
+                except Exception as e:
+                    logger.error(f"GBM failed for {symbol}: {e}")
 
         # --- Technical analysis ---
         if engines is None or "technical" in engines or "all" in engines:
