@@ -1,6 +1,7 @@
 """HTTP server for the paper trading dashboard.
 
 Serves a JSON API and the static dashboard HTML using only Python stdlib.
+Supports multiple named accounts via ?account=NAME query parameter.
 """
 
 from __future__ import annotations
@@ -15,15 +16,32 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, parse_qs
 
 from signalforge.paper.models import position_from_dict
-from signalforge.paper.portfolio import PortfolioManager
-from signalforge.paper.simulator import generate_live_signals, LIVE_PRICES_20260326
+from signalforge.paper.portfolio import AccountManager, PortfolioManager
+from signalforge.paper.simulator import (
+    auto_build_portfolio,
+    generate_real_signals,
+)
 
-# Live prices cache — updated by fetch_live_prices()
-_live_prices: dict[str, float] = dict(LIVE_PRICES_20260326)
-_prices_last_fetched: datetime | None = None
-_PRICE_CACHE_SECONDS = 60  # refetch every 60s
+import threading
+
+# Live prices cache — updated by browser via /api/update-prices
+_live_prices: dict[str, float] = {}
+
+# Cached signals — only regenerated on explicit trigger (auto-build or manual scan)
+_cached_signals: list = []
+_scan_progress: dict = {
+    "running": False,
+    "total": 0,
+    "completed": 0,
+    "symbol": "",
+    "stage": "",
+    "detail": "",
+    "error": None,
+    "log": [],  # list of {symbol, stage, detail, timestamp}
+}
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent
 _JSON_CONTENT = "application/json"
@@ -53,82 +71,53 @@ def _save_history(portfolio_path: Path, history: list[dict[str, Any]]) -> None:
         json.dump(history, f, indent=2)
 
 
-def _fetch_live_prices_google() -> dict[str, float]:
-    """Fetch live prices from Google Finance using urllib (stdlib).
+def _fetch_live_prices(symbols: list[str]) -> dict[str, float]:
+    """Fetch current prices for symbols via yfinance (stocks) and ccxt (crypto).
 
-    Returns a dict of {symbol: price} for symbols we know how to look up.
-    Falls back to cached prices on any error.
+    This runs on the server (WSL2 with network) — not affected by sandbox.
     """
-    import re
-    import urllib.request
-
-    symbol_urls = {
-        "NVDA": "https://www.google.com/finance/quote/NVDA:NASDAQ",
-        "AAPL": "https://www.google.com/finance/quote/AAPL:NASDAQ",
-        "MSFT": "https://www.google.com/finance/quote/MSFT:NASDAQ",
-        "TSLA": "https://www.google.com/finance/quote/TSLA:NASDAQ",
-        "AMZN": "https://www.google.com/finance/quote/AMZN:NASDAQ",
-        "BTC/USDT": "https://www.google.com/finance/quote/BTC-USD",
-        "ETH/USDT": "https://www.google.com/finance/quote/ETH-USD",
-        "SOL/USDT": "https://www.google.com/finance/quote/SOL-USD",
-    }
-
     prices: dict[str, float] = {}
-    for symbol, url in symbol_urls.items():
+
+    stock_syms = [s for s in symbols if "/" not in s and not s.endswith("=F")]
+    crypto_syms = [s for s in symbols if "/" in s]
+    futures_syms = [s for s in symbols if s.endswith("=F")]
+
+    # Stocks + Futures via yfinance
+    yf_syms = stock_syms + futures_syms
+    if yf_syms:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                html = resp.read().decode("utf-8", errors="ignore")
-            # Parse price from <title> tag: "NVDA $178.68 ..." or "BTC/USD 70,860.49 ..."
-            title_match = re.search(r"<title>([^<]+)</title>", html)
-            if title_match:
-                title = title_match.group(1)
-                # Try dollar format first: $178.68
-                price_match = re.search(r"\$([0-9,]+\.?\d*)", title)
-                if price_match:
-                    prices[symbol] = float(price_match.group(1).replace(",", ""))
-                else:
-                    # Crypto format: BTC/USD 70,860.49
-                    price_match = re.search(r"\s([0-9,]+\.\d+)\s", title)
-                    if price_match:
-                        prices[symbol] = float(price_match.group(1).replace(",", ""))
-        except Exception:
-            continue  # Skip this symbol, use cached price
+            import yfinance as yf
+            tickers = yf.Tickers(" ".join(yf_syms))
+            for sym in yf_syms:
+                try:
+                    info = tickers.tickers[sym].fast_info
+                    price = info.get("lastPrice") or info.get("last_price")
+                    if price and price > 0:
+                        prices[sym] = float(price)
+                except Exception:
+                    pass
+        except Exception as exc:
+            sys.stderr.write(f"yfinance price fetch failed: {exc}\n")
+
+    # Crypto via ccxt
+    if crypto_syms:
+        try:
+            import ccxt
+            from signalforge.config import load_config
+            cfg = load_config()
+            exchange_id = cfg.data.crypto_exchange
+            exchange = getattr(ccxt, exchange_id)()
+            for sym in crypto_syms:
+                try:
+                    ticker = exchange.fetch_ticker(sym)
+                    if ticker and ticker.get("last"):
+                        prices[sym] = float(ticker["last"])
+                except Exception:
+                    pass
+        except Exception as exc:
+            sys.stderr.write(f"ccxt price fetch failed: {exc}\n")
 
     return prices
-
-
-def _get_live_prices() -> dict[str, float]:
-    """Get live prices, using cache to avoid hammering Google Finance."""
-    global _live_prices, _prices_last_fetched
-
-    now = datetime.now()
-    if (
-        _prices_last_fetched is None
-        or (now - _prices_last_fetched).total_seconds() > _PRICE_CACHE_SECONDS
-    ):
-        try:
-            fetched = _fetch_live_prices_google()
-            if fetched:
-                _live_prices.update(fetched)
-                _prices_last_fetched = now
-                sys.stderr.write(
-                    f"[{now:%H:%M:%S}] Updated {len(fetched)} live prices\n"
-                )
-        except Exception as exc:
-            sys.stderr.write(f"[{now:%H:%M:%S}] Price fetch failed: {exc}\n")
-
-    return _live_prices
-
-
-def _update_portfolio_prices(manager: PortfolioManager) -> None:
-    """Update open positions with latest live prices."""
-    prices = _get_live_prices()
-    portfolio = manager.load()
-    held_symbols = {p.symbol for p in portfolio.positions}
-    price_updates = {s: p for s, p in prices.items() if s in held_symbols}
-    if price_updates:
-        manager.update_prices(price_updates)
 
 
 def _append_snapshot(manager: PortfolioManager) -> None:
@@ -152,7 +141,23 @@ def _append_snapshot(manager: PortfolioManager) -> None:
 class PaperTradingHandler(BaseHTTPRequestHandler):
     """Handle API and static file requests for the paper trading dashboard."""
 
-    manager: PortfolioManager  # set on the class before server starts
+    account_manager: AccountManager  # set on the class before server starts
+    legacy_manager: PortfolioManager | None = None  # set when --path is used
+
+    def _parse_request_path(self) -> tuple[str, dict[str, str]]:
+        """Split self.path into route and query params."""
+        parsed = urlparse(self.path)
+        params = {}
+        for k, v in parse_qs(parsed.query).items():
+            params[k] = v[0] if v else ""
+        return parsed.path, params
+
+    def _get_manager(self, params: dict[str, str] | None = None) -> PortfolioManager:
+        """Get PortfolioManager for the requested account."""
+        if self.__class__.legacy_manager is not None:
+            return self.__class__.legacy_manager
+        account = (params or {}).get("account", "default")
+        return self.__class__.account_manager.get_manager(account)
 
     def _set_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -186,44 +191,57 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:  # noqa: N802
+        route, params = self._parse_request_path()
         routes: dict[str, Any] = {
             "/api/portfolio": self._handle_portfolio,
             "/api/signals": self._handle_signals,
             "/api/history": self._handle_history,
             "/api/prices": self._handle_prices_proxy,
+            "/api/accounts": self._handle_accounts_list,
+            "/api/scan/status": self._handle_scan_status,
         }
-        handler = routes.get(self.path)
+        handler = routes.get(route)
         if handler is not None:
-            handler()
+            handler(params)
             return
 
         # Serve static dashboard
-        if self.path in ("/", "/index.html", "/dashboard.html"):
+        if route in ("/", "/index.html", "/dashboard.html"):
             self._serve_dashboard()
             return
 
         self._send_error_json(HTTPStatus.NOT_FOUND, "Not found")
 
     def do_POST(self) -> None:  # noqa: N802
+        route, params = self._parse_request_path()
         routes: dict[str, Any] = {
             "/api/open": self._handle_open,
             "/api/close": self._handle_close,
             "/api/update-stops": self._handle_update_stops,
             "/api/update-prices": self._handle_update_prices,
+            "/api/accounts/create": self._handle_account_create,
+            "/api/accounts/reset": self._handle_account_reset,
+            "/api/accounts/delete": self._handle_account_delete,
+            "/api/auto-build": self._handle_auto_build,
+            "/api/scan": self._handle_scan_start,
         }
-        handler = routes.get(self.path)
+        handler = routes.get(route)
         if handler is not None:
-            handler()
+            handler(params)
             return
 
         self._send_error_json(HTTPStatus.NOT_FOUND, "Not found")
 
     # -- GET handlers ---------------------------------------------------
 
-    def _handle_portfolio(self) -> None:
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
-        _update_portfolio_prices(manager)
+    def _handle_portfolio(self, params: dict[str, str]) -> None:
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        # Return data immediately — price updates happen via /api/update-prices
         portfolio = manager.load()
         _append_snapshot(manager)
         history = _load_history(manager.path)
@@ -241,8 +259,9 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "value_history": history,
         })
 
-    def _handle_signals(self) -> None:
-        signals = generate_live_signals()
+    def _handle_signals(self, params: dict[str, str]) -> None:
+        """Return cached signals. Pipeline only runs on auto-build or POST /api/scan."""
+        global _cached_signals
         self._send_json([
             {
                 "symbol": s.symbol,
@@ -255,42 +274,61 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 "horizon_days": s.horizon_days,
                 "rationale": s.rationale,
             }
-            for s in signals
+            for s in _cached_signals
         ])
 
-    def _handle_history(self) -> None:
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
+    def _handle_history(self, params: dict[str, str]) -> None:
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
         portfolio = manager.load()
         self._send_json([t.to_dict() for t in portfolio.trades])
 
-    def _handle_prices_proxy(self) -> None:
-        """Proxy endpoint: server fetches live prices and returns them.
+    def _handle_prices_proxy(self, params: dict[str, str]) -> None:
+        """Fetch current prices for held positions via yfinance/ccxt."""
+        manager = self._get_manager(params)
+        if not manager.exists():
+            self._send_json({"prices": {}})
+            return
 
-        The browser can't fetch Google Finance directly (CORS), so it
-        calls this endpoint instead. The server uses urllib which may
-        also be blocked by proxy, but falls back to cached prices.
-        """
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
-
-        # Try to fetch fresh prices
-        prices = _get_live_prices()
-
-        # Also update positions while we're at it
         portfolio = manager.load()
-        held = {p.symbol for p in portfolio.positions}
-        updates = {s: p for s, p in prices.items() if s in held}
-        if updates:
-            manager.update_prices(updates)
+        held = [p.symbol for p in portfolio.positions]
+        if not held:
+            self._send_json({"prices": dict(_live_prices)})
+            return
 
-        self._send_json({"prices": prices})
+        # Fetch real prices for held symbols
+        prices = _fetch_live_prices(held)
+        if prices:
+            _live_prices.update(prices)
+            manager.update_prices(prices)
+
+        self._send_json({"prices": dict(_live_prices)})
+
+    def _handle_accounts_list(self, params: dict[str, str]) -> None:
+        """List all accounts with summaries."""
+        am = self.__class__.account_manager
+        names = am.list_accounts()
+        accounts = []
+        for name in names:
+            try:
+                accounts.append(am.get_account_summary(name))
+            except Exception:
+                accounts.append({"name": name, "error": "failed to load"})
+        self._send_json({"accounts": accounts})
 
     # -- POST handlers --------------------------------------------------
 
-    def _handle_open(self) -> None:
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
+    def _handle_open(self, params: dict[str, str]) -> None:
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
         try:
             body = self._read_body()
             required = ("symbol", "side", "qty", "entry_price", "stop_loss", "target_price")
@@ -315,9 +353,13 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
-    def _handle_close(self) -> None:
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
+    def _handle_close(self, params: dict[str, str]) -> None:
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
         try:
             body = self._read_body()
             if "symbol" not in body or "exit_price" not in body:
@@ -337,14 +379,14 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
-    def _handle_update_stops(self) -> None:
-        """Update stop_loss and/or target_price on a position.
-
-        Since Position is frozen, we rebuild the positions list with
-        dataclasses.replace() for the matching symbol.
-        """
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
+    def _handle_update_stops(self, params: dict[str, str]) -> None:
+        """Update stop_loss and/or target_price on a position."""
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
         try:
             body = self._read_body()
             symbol = body.get("symbol")
@@ -386,19 +428,21 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 return
 
             portfolio.positions = updated_positions
-            # Save via the manager's internal method
             manager._save(portfolio)
 
-            # Return the updated position
             updated = next(p for p in updated_positions if p.symbol == symbol)
             self._send_json(updated.to_dict())
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
-    def _handle_update_prices(self) -> None:
-        """Accept price updates from the browser (which can fetch from Google Finance)."""
-        manager = self.__class__.manager
-        self._ensure_portfolio(manager)
+    def _handle_update_prices(self, params: dict[str, str]) -> None:
+        """Accept price updates from the browser."""
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
         try:
             body = self._read_body()
             prices = body.get("prices", {})
@@ -409,7 +453,6 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 )
                 return
             float_prices = {k: float(v) for k, v in prices.items()}
-            # Update global cache too
             global _live_prices
             _live_prices.update(float_prices)
             manager.update_prices(float_prices)
@@ -419,6 +462,177 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 "total_value": round(portfolio.total_value, 2),
                 "unrealized_pnl": round(portfolio.unrealized_pnl, 2),
             })
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
+    # -- Account management endpoints -----------------------------------
+
+    def _handle_account_create(self, params: dict[str, str]) -> None:
+        """Create a new account. Body: {name, balance?, asset_categories?}"""
+        try:
+            body = self._read_body()
+            name = body.get("name", "").strip()
+            if not name:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "Missing field: name")
+                return
+            balance = float(body.get("balance", 5000))
+            force = body.get("force", False)
+            am = self.__class__.account_manager
+            am.create_account(name, balance=balance, force=force)
+            self._send_json(am.get_account_summary(name), status=HTTPStatus.CREATED)
+        except (ValueError, FileExistsError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        except (json.JSONDecodeError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
+    def _handle_account_reset(self, params: dict[str, str]) -> None:
+        """Reset an account. Body: {name, balance?}"""
+        try:
+            body = self._read_body()
+            name = body.get("name", "").strip()
+            if not name:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "Missing field: name")
+                return
+            balance = body.get("balance")
+            if balance is not None:
+                balance = float(balance)
+            am = self.__class__.account_manager
+            am.reset_account(name, balance=balance)
+            self._send_json(am.get_account_summary(name))
+        except (ValueError, FileExistsError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        except (json.JSONDecodeError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
+    def _handle_account_delete(self, params: dict[str, str]) -> None:
+        """Delete an account. Body: {name}"""
+        try:
+            body = self._read_body()
+            name = body.get("name", "").strip()
+            if not name:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "Missing field: name")
+                return
+            am = self.__class__.account_manager
+            am.delete_account(name)
+            self._send_json({"deleted": name})
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        except (json.JSONDecodeError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
+    # -- scan & auto-build endpoints -------------------------------------
+
+    def _handle_scan_start(self, params: dict[str, str]) -> None:
+        """Start pipeline scan in background thread. Poll /api/scan/status for progress.
+
+        Body: {categories: ["us_stocks", "crypto"]}
+        """
+        global _scan_progress
+        if _scan_progress["running"]:
+            self._send_json({
+                "status": "already_running",
+                **{k: _scan_progress[k] for k in ("total", "completed", "symbol", "stage")},
+            })
+            return
+        try:
+            body = self._read_body()
+            categories = body.get("categories", ["us_stocks", "crypto"])
+
+            _scan_progress = {
+                "running": True, "total": 0, "completed": 0,
+                "symbol": "", "stage": "starting", "detail": "Initializing pipeline...",
+                "error": None, "log": [],
+            }
+
+            def _on_progress(p: dict) -> None:
+                global _scan_progress
+                _scan_progress.update(p)
+                _scan_progress["running"] = True
+                _scan_progress.setdefault("log", []).append({
+                    "symbol": p.get("symbol", ""),
+                    "stage": p.get("stage", ""),
+                    "detail": p.get("detail", ""),
+                    "ts": datetime.now().strftime("%H:%M:%S"),
+                })
+
+            def _run_scan() -> None:
+                global _cached_signals, _scan_progress
+                try:
+                    sys.stderr.write(f"[Scan] Background scan started: {categories}\n")
+                    signals = generate_real_signals(
+                        categories=categories,
+                        progress_cb=_on_progress,
+                    )
+                    _cached_signals = signals
+                    _scan_progress = {
+                        "running": False, "total": _scan_progress.get("total", 0),
+                        "completed": _scan_progress.get("total", 0),
+                        "symbol": "", "stage": "complete",
+                        "detail": f"Done: {len(signals)} signals generated",
+                        "error": None,
+                    }
+                    sys.stderr.write(f"[Scan] Done: {len(signals)} signals\n")
+                except Exception as exc:
+                    _scan_progress = {
+                        "running": False, "total": 0, "completed": 0,
+                        "symbol": "", "stage": "error", "detail": "",
+                        "error": str(exc),
+                    }
+                    sys.stderr.write(f"[Scan] Failed: {exc}\n")
+
+            thread = threading.Thread(target=_run_scan, daemon=True)
+            thread.start()
+            self._send_json({"status": "started", "categories": categories})
+        except (json.JSONDecodeError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
+    def _handle_scan_status(self, params: dict[str, str]) -> None:
+        """Return detailed scan progress with log history."""
+        # Only send last 50 log entries to avoid huge responses
+        log = _scan_progress.get("log", [])[-50:]
+        self._send_json({
+            "running": _scan_progress["running"],
+            "total": _scan_progress.get("total", 0),
+            "completed": _scan_progress.get("completed", 0),
+            "symbol": _scan_progress.get("symbol", ""),
+            "stage": _scan_progress.get("stage", ""),
+            "detail": _scan_progress.get("detail", ""),
+            "error": _scan_progress.get("error"),
+            "count": len(_cached_signals) if not _scan_progress["running"] else None,
+            "log": log,
+        })
+
+    def _handle_auto_build(self, params: dict[str, str]) -> None:
+        """Auto-build portfolio: run pipeline → top N → Kelly allocation → open positions.
+
+        Body: {categories: ["us_stocks", "crypto"], top_n?: 5}
+        """
+        global _cached_signals
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        try:
+            body = self._read_body()
+            categories = body.get("categories", ["us_stocks", "crypto"])
+            top_n = int(body.get("top_n", 5))
+
+            result = auto_build_portfolio(
+                manager=manager,
+                categories=categories,
+                top_n=top_n,
+            )
+
+            # Cache the signals generated during auto-build for the signals endpoint
+            if "all_signals" in result:
+                _cached_signals = result.pop("all_signals")
+
+            if "error" in result and not result.get("positions_opened"):
+                self._send_error_json(HTTPStatus.BAD_REQUEST, result["error"])
+                return
+            self._send_json(result)
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
@@ -444,9 +658,16 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _ensure_portfolio(manager: PortfolioManager) -> None:
-        """Initialize portfolio if it does not exist yet."""
+        """Initialize portfolio if it does not exist yet (default account only)."""
         if not manager.exists():
-            manager.init()
+            # Only auto-create for the default account path
+            if manager.path.parent.name == "default":
+                manager.init()
+            else:
+                raise ValueError(
+                    f"Account '{manager.path.parent.name}' does not exist. "
+                    "Create it first via the accounts API."
+                )
 
     def log_message(self, format: str, *args: Any) -> None:
         """Override to include timestamp in log output."""
@@ -481,17 +702,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
-    manager = PortfolioManager(path=args.path)
 
-    # Attach manager to the handler class so all requests can access it
-    PaperTradingHandler.manager = manager
+    am = AccountManager()
+    PaperTradingHandler.account_manager = am
+
+    # If --path is given, use legacy single-file mode
+    if args.path:
+        PaperTradingHandler.legacy_manager = PortfolioManager(path=args.path)
+    else:
+        PaperTradingHandler.legacy_manager = None
 
     class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
 
     server = ThreadedHTTPServer(("0.0.0.0", args.port), PaperTradingHandler)
+    accounts = am.list_accounts()
     print(f"Paper trading server running on http://localhost:{args.port}")
-    print(f"Portfolio path: {manager.path}")
+    print(f"Accounts: {', '.join(accounts) if accounts else '(none yet, will auto-create default)'}")
     print(f"Dashboard: http://localhost:{args.port}/")
     print("Press Ctrl+C to stop.")
 

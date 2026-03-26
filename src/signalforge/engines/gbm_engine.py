@@ -12,7 +12,10 @@ Dependencies:
 
 from __future__ import annotations
 
+import datetime as _dt
+import pickle
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -56,6 +59,7 @@ class GBMConfig:
         label_horizon: Forward return prediction period (days).
         feature_windows: Rolling window sizes for feature engineering.
         min_train_rows: Minimum rows required after feature computation.
+        model_dir: Directory for persisted model artifacts (supports ``~``).
     """
 
     enabled: bool = False
@@ -65,6 +69,7 @@ class GBMConfig:
     label_horizon: int = 5
     feature_windows: tuple[int, ...] = (5, 10, 20, 40)
     min_train_rows: int = 60
+    model_dir: str = "~/.signalforge/models/gbm"
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +80,7 @@ class GBMConfig:
 def _compute_features(
     df: pd.DataFrame,
     windows: tuple[int, ...] = (5, 10, 20, 40),
+    extra_factors: list[dict] | None = None,
 ) -> pd.DataFrame:
     """Derive a rich set of trading features from OHLCV data.
 
@@ -84,6 +90,7 @@ def _compute_features(
         - Volatility: realised vol, ATR, Bollinger width
         - Volume: relative volume, volume momentum
         - Price action: candle body ratio, upper/lower shadows
+        - Extra: dynamically discovered factors from the factor registry
     """
     close = df["close"].astype(np.float64)
     high = df["high"].astype(np.float64)
@@ -161,6 +168,16 @@ def _compute_features(
     macd = ema12 - ema26
     macd_signal = macd.ewm(span=9).mean()
     features["macd_hist"] = (macd - macd_signal) / (close + 1e-12)
+
+    # --- Extra factors from evolution registry ---
+    if extra_factors:
+        for factor in extra_factors:
+            try:
+                features[factor["name"]] = eval(  # noqa: S307
+                    factor["expression"], {"df": df, "np": np, "pd": pd}
+                )
+            except Exception as e:
+                logger.warning("Factor {} failed: {}", factor["name"], e)
 
     return features
 
@@ -255,7 +272,67 @@ class GBMEnsembleEngine(PredictionEngine):
     def config(self) -> GBMConfig:
         return self._config
 
-    def predict(self, df: pd.DataFrame, pred_len: int | None = None) -> pd.DataFrame:
+    # ------------------------------------------------------------------
+    # Model persistence
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _safe_symbol(symbol: str) -> str:
+        """Sanitize *symbol* for use as a filename component."""
+        return symbol.replace("/", "-")
+
+    def _model_path(self, symbol: str) -> Path:
+        return Path(self._config.model_dir).expanduser() / f"{self._safe_symbol(symbol)}.pkl"
+
+    def save_model(
+        self,
+        symbol: str,
+        model: Any,
+        feature_cols: list[str],
+        val_r2: float,
+        n_rows: int | None = None,
+    ) -> Path:
+        """Persist a trained model to disk.
+
+        The saved artifact is a dict with keys:
+        ``model``, ``feature_cols``, ``val_r2``, ``trained_at``, ``n_rows``.
+        """
+        path = self._model_path(symbol)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "model": model,
+            "feature_cols": feature_cols,
+            "val_r2": val_r2,
+            "trained_at": _dt.datetime.utcnow().isoformat(),
+            "n_rows": n_rows or 0,
+        }
+
+        with open(path, "wb") as fh:
+            pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+        logger.info("GBM model saved for {} -> {}", symbol, path)
+        return path
+
+    def load_model(self, symbol: str) -> dict[str, Any] | None:
+        """Load a previously saved model.  Returns *None* if not found."""
+        path = self._model_path(symbol)
+        if not path.exists():
+            return None
+
+        with open(path, "rb") as fh:
+            payload: dict[str, Any] = pickle.load(fh)  # noqa: S301
+
+        logger.info(
+            "GBM model loaded for {} (trained_at={}, n_rows={}, val_r2={:.4f})",
+            symbol,
+            payload.get("trained_at"),
+            payload.get("n_rows"),
+            payload.get("val_r2", 0.0),
+        )
+        return payload
+
+    def predict(self, df: pd.DataFrame, pred_len: int | None = None, symbol: str | None = None) -> pd.DataFrame:
         """Train on *df* and forecast *pred_len* future OHLCV candles.
 
         Returns a DataFrame with columns:
@@ -276,7 +353,7 @@ class GBMEnsembleEngine(PredictionEngine):
         future_ts = _generate_future_timestamps(prepared.index[-1], freq, horizon)
 
         try:
-            predicted_returns, confidences = self._fit_predict(prepared, horizon)
+            predicted_returns, confidences = self._fit_predict(prepared, horizon, symbol=symbol)
         except Exception:
             logger.exception("GBM prediction failed -- returning zero predictions.")
             predicted_returns = np.zeros(horizon)
@@ -292,10 +369,36 @@ class GBMEnsembleEngine(PredictionEngine):
         self,
         df: pd.DataFrame,
         pred_len: int,
+        symbol: str | None = None,
+        use_discovered_factors: bool = True,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Compute features, train GBM, and predict forward returns."""
+        """Compute features, train GBM, and predict forward returns.
+
+        When *symbol* is provided, the engine attempts to load a previously
+        saved model.  If the current dataset has grown by more than 10%
+        compared to the saved snapshot the model is retrained and re-saved.
+        If *symbol* is ``None`` the engine behaves statelessly (no I/O).
+
+        When *use_discovered_factors* is ``True`` (default), accepted factors
+        from the :class:`~signalforge.evolution.factor_registry.FactorRegistry`
+        are appended as extra features.
+        """
         cfg = self._config
-        features = _compute_features(df, cfg.feature_windows)
+
+        extra_factors: list[dict] | None = None
+        if use_discovered_factors:
+            try:
+                from signalforge.evolution.factor_registry import FactorRegistry
+
+                registry = FactorRegistry().load()
+                accepted = registry.get_accepted_factors()
+                if accepted:
+                    extra_factors = accepted
+                    logger.info("GBM: loaded {} accepted factors from registry", len(accepted))
+            except Exception as exc:
+                logger.debug("Could not load factor registry: {}", exc)
+
+        features = _compute_features(df, cfg.feature_windows, extra_factors=extra_factors)
         close = df["close"].astype(np.float64)
 
         # Label: forward return over label_horizon days
@@ -315,25 +418,68 @@ class GBMEnsembleEngine(PredictionEngine):
         feature_cols = [c for c in combined.columns if c != "label"]
         X = combined[feature_cols].values
         y = combined["label"].values
+        n_rows = len(X)
 
-        # Train/val split: last 20%
-        split = max(1, int(len(X) * 0.8))
-        X_train, X_val = X[:split], X[split:]
-        y_train, y_val = y[:split], y[split:]
+        # ------------------------------------------------------------------
+        # Try loading a persisted model
+        # ------------------------------------------------------------------
+        model: Any | None = None
+        r2: float = 0.3
+        need_train = True
 
-        if _LGBM_AVAILABLE:
-            model = self._train_lgbm(X_train, y_train, X_val, y_val)
-        else:
-            model = self._train_sklearn(X_train, y_train)
+        if symbol is not None:
+            saved = self.load_model(symbol)
+            if saved is not None:
+                saved_n_rows = saved.get("n_rows", 0)
+                growth = (n_rows - saved_n_rows) / max(saved_n_rows, 1)
+                if growth <= 0.10:
+                    # Re-use saved model without retraining
+                    model = saved["model"]
+                    feature_cols = saved["feature_cols"]
+                    r2 = saved.get("val_r2", 0.3)
+                    need_train = False
+                    logger.info(
+                        "Re-using saved GBM for {} (rows {}->{}, growth {:.1%} <= 10%)",
+                        symbol,
+                        saved_n_rows,
+                        n_rows,
+                        growth,
+                    )
+                else:
+                    logger.info(
+                        "Retraining GBM for {} (rows {}->{}, growth {:.1%} > 10%)",
+                        symbol,
+                        saved_n_rows,
+                        n_rows,
+                        growth,
+                    )
 
-        # Validation R^2 for confidence
-        val_pred = model.predict(X_val) if len(X_val) > 0 else np.array([])
-        if len(val_pred) > 1:
-            ss_res = np.sum((y_val - val_pred) ** 2)
-            ss_tot = np.sum((y_val - y_val.mean()) ** 2) + 1e-12
-            r2 = float(np.clip(1.0 - ss_res / ss_tot, 0.0, 1.0))
-        else:
-            r2 = 0.3
+        # ------------------------------------------------------------------
+        # Train (or retrain) if needed
+        # ------------------------------------------------------------------
+        if need_train:
+            # Train/val split: last 20%
+            split = max(1, int(len(X) * 0.8))
+            X_train, X_val = X[:split], X[split:]
+            y_train, y_val = y[:split], y[split:]
+
+            if _LGBM_AVAILABLE:
+                model = self._train_lgbm(X_train, y_train, X_val, y_val)
+            else:
+                model = self._train_sklearn(X_train, y_train)
+
+            # Validation R^2 for confidence
+            val_pred = model.predict(X_val) if len(X_val) > 0 else np.array([])
+            if len(val_pred) > 1:
+                ss_res = np.sum((y_val - val_pred) ** 2)
+                ss_tot = np.sum((y_val - y_val.mean()) ** 2) + 1e-12
+                r2 = float(np.clip(1.0 - ss_res / ss_tot, 0.0, 1.0))
+            else:
+                r2 = 0.3
+
+            # Persist the freshly trained model
+            if symbol is not None:
+                self.save_model(symbol, model, feature_cols, r2, n_rows=n_rows)
 
         # Predict using latest features (pass as DataFrame to preserve feature names)
         latest = features.replace([np.inf, -np.inf], np.nan).ffill().iloc[-1:]

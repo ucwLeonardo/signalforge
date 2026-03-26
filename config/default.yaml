@@ -102,9 +102,9 @@ engines:
     pred_len: 5
 
   trading_agents:
-    enabled: true         # Gemini-powered multi-analyst LLM analysis
+    enabled: true         # Gemini-powered multi-analyst LLM analysis (called once for top N, not per-asset)
     llm_provider: gemini
-    model: gemini-2.5-flash
+    model: gemini-3-flash-preview   # Gemini 3 Flash (free tier, best cost/performance for trading analysis)
     temperature: 0.3
 
   lstm:

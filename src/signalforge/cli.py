@@ -109,6 +109,99 @@ def fetch(
 
 
 @app.command()
+def train(
+    symbols: list[str] = typer.Argument(
+        None, help="Symbols to train (default: all configured assets)"
+    ),
+    categories: list[str] = typer.Option(
+        ["us_stocks", "crypto"],
+        "--categories",
+        "-cat",
+        help="Asset categories to train",
+    ),
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Train LSTM and GBM models for all assets. Saves models for fast inference.
+
+    First run: downloads data + trains from scratch (slow).
+    Subsequent runs: incremental data update + fine-tune (fast).
+
+    Models are saved to ~/.signalforge/models/{lstm,gbm}/ and reused
+    by 'signalforge scan' and the paper trading dashboard's Auto Build.
+    """
+    from signalforge.config import load_config
+    from signalforge.data.incremental import IncrementalFetcher
+    from signalforge.data.store import DataStore
+    from signalforge.pipeline import _classify_symbol, _get_lookback_days
+
+    cfg = load_config(config_path)
+    store = DataStore(cfg.data_dir)
+    fetcher = IncrementalFetcher(store)
+
+    # Build symbol list
+    if not symbols:
+        from signalforge.paper.simulator import _get_symbols_for_categories
+        symbols = _get_symbols_for_categories(categories, cfg)
+
+    console.print(
+        Panel(
+            f"[bold]Training models for {len(symbols)} assets[/bold]\n\n"
+            f"  Categories: {', '.join(categories)}\n"
+            f"  Engines: LSTM, GBM\n"
+            f"  Models dir: ~/.signalforge/models/",
+            title="SignalForge Train",
+            border_style="cyan",
+        )
+    )
+
+    trained = 0
+    failed = 0
+    for i, symbol in enumerate(symbols, 1):
+        console.print(
+            f"[{i}/{len(symbols)}] {symbol}...", end=" "
+        )
+        sym_type = _classify_symbol(symbol)
+        lookback = _get_lookback_days(sym_type, cfg)
+        exchange_id = cfg.data.crypto_exchange if sym_type == "crypto" else None
+
+        try:
+            # 1. Fetch/update data
+            df = fetcher.fetch(symbol, "1d", lookback, exchange_id=exchange_id)
+            if df.empty or len(df) < 30:
+                console.print(f"[yellow]skip ({len(df)} bars)[/yellow]")
+                continue
+
+            # 2. Train LSTM
+            if cfg.lstm.enabled:
+                try:
+                    from signalforge.engines.lstm_engine import LSTMEngine
+                    lstm = LSTMEngine(cfg.lstm)
+                    lstm.predict(df, pred_len=5, symbol=symbol)
+                except Exception as e:
+                    console.print(f"[yellow]LSTM: {e}[/yellow]", end=" ")
+
+            # 3. Train GBM
+            if cfg.gbm.enabled:
+                try:
+                    from signalforge.engines.gbm_engine import GBMEnsembleEngine
+                    gbm = GBMEnsembleEngine(cfg.gbm)
+                    gbm.predict(df, pred_len=5, symbol=symbol)
+                except Exception as e:
+                    console.print(f"[yellow]GBM: {e}[/yellow]", end=" ")
+
+            console.print("[green]done[/green]")
+            trained += 1
+        except Exception as e:
+            console.print(f"[red]{e}[/red]")
+            failed += 1
+
+    console.print(
+        f"\n[bold]Training complete:[/bold] {trained} trained, {failed} failed, "
+        f"{len(symbols) - trained - failed} skipped"
+    )
+
+
+@app.command()
 def predict(
     symbol: str = typer.Argument(..., help="Symbol to predict"),
     horizon: int = typer.Option(5, "--horizon", "-h", help="Prediction horizon in bars"),
@@ -403,21 +496,33 @@ def dashboard(
 @paper_app.command()
 def init(
     balance: float = typer.Option(5000.0, "--balance", "-b", help="Starting balance in USD"),
-    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p", help="Portfolio JSON path"),
+    account: str = typer.Option("default", "--account", "-a", help="Account name"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing portfolio"),
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p", help="Portfolio JSON path (overrides --account)"),
 ) -> None:
     """Initialize a new paper trading portfolio."""
-    from signalforge.paper.portfolio import PortfolioManager
+    from signalforge.paper.portfolio import AccountManager, PortfolioManager
 
-    mgr = PortfolioManager(portfolio_path)
-    if mgr.exists():
-        console.print("[yellow]Portfolio already exists. Use --path for a new one, or delete the existing file.[/yellow]")
-        console.print(f"  Path: {mgr.path}")
-        raise typer.Exit(1)
+    if portfolio_path:
+        mgr = PortfolioManager(portfolio_path)
+        if mgr.exists() and not force:
+            console.print("[yellow]Portfolio already exists. Use --force to overwrite.[/yellow]")
+            console.print(f"  Path: {mgr.path}")
+            raise typer.Exit(1)
+        portfolio = mgr.init(balance=balance, force=force)
+    else:
+        am = AccountManager()
+        if am.account_exists(account) and not force:
+            console.print(f"[yellow]Account '{account}' already exists. Use --force to reset.[/yellow]")
+            raise typer.Exit(1)
+        mgr = am.create_account(account, balance=balance, force=force)
+        portfolio = mgr.load()
 
-    portfolio = mgr.init(balance=balance)
+    action = "reset" if force else "created"
     console.print(
         Panel(
-            f"[bold green]Paper portfolio created![/bold green]\n\n"
+            f"[bold green]Paper portfolio {action}![/bold green]\n\n"
+            f"  Account: [bold]{account}[/bold]\n"
             f"  Balance: [bold]${portfolio.cash:,.2f}[/bold]\n"
             f"  Path:    {mgr.path}",
             title="SignalForge Paper Trading",
@@ -427,28 +532,61 @@ def init(
 
 
 @paper_app.command()
+def accounts() -> None:
+    """List all paper trading accounts."""
+    from rich.table import Table
+
+    from signalforge.paper.portfolio import AccountManager
+
+    am = AccountManager()
+    names = am.list_accounts()
+    if not names:
+        console.print("[dim]No accounts found. Run 'signalforge paper init' to create one.[/dim]")
+        return
+
+    table = Table(title="Paper Trading Accounts", show_lines=True)
+    table.add_column("Account", style="bold")
+    table.add_column("Balance", justify="right")
+    table.add_column("Total Value", justify="right")
+    table.add_column("P&L", justify="right")
+    table.add_column("P&L %", justify="right")
+    table.add_column("Positions", justify="center")
+    table.add_column("Trades", justify="center")
+
+    for name in names:
+        s = am.get_account_summary(name)
+        pnl_color = "green" if s["total_pnl"] >= 0 else "red"
+        table.add_row(
+            name,
+            f"${s['initial_balance']:,.2f}",
+            f"${s['total_value']:,.2f}",
+            f"[{pnl_color}]${s['total_pnl']:,.2f}[/{pnl_color}]",
+            f"[{pnl_color}]{s['total_pnl_pct']:+.2f}%[/{pnl_color}]",
+            str(s["positions_count"]),
+            str(s["trades_count"]),
+        )
+    console.print(table)
+
+
+@paper_app.command()
 def status(
+    account: str = typer.Option("default", "--account", "-a", help="Account name"),
     portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
 ) -> None:
     """Show current portfolio status, positions, and P&L."""
     from rich.table import Table
 
-    from signalforge.paper.portfolio import PortfolioManager
+    from signalforge.paper.portfolio import AccountManager, PortfolioManager
 
-    mgr = PortfolioManager(portfolio_path)
+    if portfolio_path:
+        mgr = PortfolioManager(portfolio_path)
+    else:
+        mgr = AccountManager().get_manager(account)
     if not mgr.exists():
-        console.print("[red]No portfolio found. Run 'signalforge paper init' first.[/red]")
+        console.print(f"[red]No portfolio found for account '{account}'. Run 'signalforge paper init' first.[/red]")
         raise typer.Exit(1)
 
-    # Update positions with live prices
-    from signalforge.paper.simulator import LIVE_PRICES_20260326
-
     p = mgr.load()
-    held_symbols = {pos.symbol for pos in p.positions}
-    price_updates = {s: px for s, px in LIVE_PRICES_20260326.items() if s in held_symbols}
-    if price_updates:
-        mgr.update_prices(price_updates)
-        p = mgr.load()
 
     # Summary
     pnl_style = "green" if p.total_pnl >= 0 else "red"
@@ -500,16 +638,20 @@ def status(
 @paper_app.command()
 def auto(
     n: int = typer.Option(5, "--n", "-n", help="Max signals to trade"),
+    account: str = typer.Option("default", "--account", "-a", help="Account name"),
     portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
 ) -> None:
     """Auto-trade top signals using position sizing rules (max 20% per trade)."""
     from signalforge.paper.executor import execute_signals
-    from signalforge.paper.portfolio import PortfolioManager
+    from signalforge.paper.portfolio import AccountManager, PortfolioManager
     from signalforge.paper.simulator import generate_live_signals
 
-    mgr = PortfolioManager(portfolio_path)
+    if portfolio_path:
+        mgr = PortfolioManager(portfolio_path)
+    else:
+        mgr = AccountManager().get_manager(account)
     if not mgr.exists():
-        console.print("[red]No portfolio found. Run 'signalforge paper init' first.[/red]")
+        console.print(f"[red]No portfolio found for account '{account}'. Run 'signalforge paper init' first.[/red]")
         raise typer.Exit(1)
 
     # Generate signals from live prices
@@ -556,14 +698,18 @@ def close(
     symbol: str = typer.Argument(..., help="Symbol to close"),
     price: Optional[float] = typer.Option(None, "--price", help="Exit price (uses entry if omitted)"),
     reason: str = typer.Option("manual", "--reason", "-r", help="Reason: manual, target_hit, stop_hit"),
+    account: str = typer.Option("default", "--account", "-a", help="Account name"),
     portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
 ) -> None:
     """Close an open position."""
-    from signalforge.paper.portfolio import PortfolioManager
+    from signalforge.paper.portfolio import AccountManager, PortfolioManager
 
-    mgr = PortfolioManager(portfolio_path)
+    if portfolio_path:
+        mgr = PortfolioManager(portfolio_path)
+    else:
+        mgr = AccountManager().get_manager(account)
     if not mgr.exists():
-        console.print("[red]No portfolio found.[/red]")
+        console.print(f"[red]No portfolio found for account '{account}'.[/red]")
         raise typer.Exit(1)
 
     p = mgr.load()
@@ -585,16 +731,20 @@ def close(
 
 @paper_app.command()
 def history(
+    account: str = typer.Option("default", "--account", "-a", help="Account name"),
     portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
 ) -> None:
     """Show completed trade history."""
     from rich.table import Table
 
-    from signalforge.paper.portfolio import PortfolioManager
+    from signalforge.paper.portfolio import AccountManager, PortfolioManager
 
-    mgr = PortfolioManager(portfolio_path)
+    if portfolio_path:
+        mgr = PortfolioManager(portfolio_path)
+    else:
+        mgr = AccountManager().get_manager(account)
     if not mgr.exists():
-        console.print("[red]No portfolio found.[/red]")
+        console.print(f"[red]No portfolio found for account '{account}'.[/red]")
         raise typer.Exit(1)
 
     p = mgr.load()
@@ -639,7 +789,7 @@ def paper_dashboard(
     port: int = typer.Option(8787, "--port", help="Server port"),
     portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
 ) -> None:
-    """Launch the paper trading web dashboard."""
+    """Launch the paper trading web dashboard (supports all accounts)."""
     from signalforge.paper.server import main as server_main
 
     args = [f"--port={port}"]

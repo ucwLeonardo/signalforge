@@ -128,6 +128,7 @@ class FactorEvolver:
             logger.info("Falling back to simple evolution")
             return self._run_fallback()
 
+        _save_factors_to_registry(self._result.factors_discovered)
         return self._result
 
     def _run_fallback(self) -> EvolutionResult:
@@ -137,33 +138,34 @@ class FactorEvolver:
 
         logger.info("Running fallback factor evolution (no RD-Agent)")
 
-        # Define candidate factor formulas from OHLCV
+        # Define candidate factor formulas from OHLCV with eval expressions
         factor_templates = [
-            ("momentum_{n}d", lambda df, n: df["close"].pct_change(n)),
-            ("volatility_{n}d", lambda df, n: df["close"].pct_change().rolling(n).std()),
-            ("volume_ratio_{n}d", lambda df, n: df["volume"] / df["volume"].rolling(n).mean()),
-            ("high_low_ratio_{n}d", lambda df, n: (df["high"] - df["low"]) / df["close"]),
-            ("close_ma_ratio_{n}d", lambda df, n: df["close"] / df["close"].rolling(n).mean()),
-            ("rsi_{n}d", lambda df, n: _compute_rsi(df["close"], n)),
-            ("price_position_{n}d", lambda df, n: (
-                (df["close"] - df["low"].rolling(n).min()) /
-                (df["high"].rolling(n).max() - df["low"].rolling(n).min() + 1e-10)
-            )),
+            ("momentum_{n}d", "df['close'].pct_change({n})"),
+            ("volatility_{n}d", "df['close'].pct_change().rolling({n}).std()"),
+            ("volume_ratio_{n}d", "df['volume'] / df['volume'].rolling({n}).mean()"),
+            ("high_low_ratio_{n}d", "(df['high'] - df['low']) / df['close']"),
+            ("close_ma_ratio_{n}d", "df['close'] / df['close'].rolling({n}).mean()"),
+            (
+                "price_position_{n}d",
+                "(df['close'] - df['low'].rolling({n}).min()) / "
+                "(df['high'].rolling({n}).max() - df['low'].rolling({n}).min() + 1e-10)",
+            ),
         ]
 
         windows = [5, 10, 20, 40, 60]
         discovered = []
 
-        for name_tmpl, func in factor_templates:
+        for name_tmpl, expr_tmpl in factor_templates:
             for window in windows:
                 name = name_tmpl.format(n=window)
+                expression = expr_tmpl.format(n=window)
                 try:
-                    # We'd need actual data here - for now just record the template
                     discovered.append({
                         "name": name,
+                        "expression": expression,
                         "window": window,
-                        "template": name_tmpl,
                         "status": "candidate",
+                        "ic": 0.0,
                     })
                 except Exception:
                     continue
@@ -172,7 +174,25 @@ class FactorEvolver:
         self._result.iterations_completed = 1
         logger.info(f"Generated {len(discovered)} candidate factors")
 
+        _save_factors_to_registry(discovered)
         return self._result
+
+
+def _save_factors_to_registry(factors: list[dict[str, Any]]) -> None:
+    """Persist discovered factors into the :class:`FactorRegistry`."""
+    if not factors:
+        return
+    try:
+        from signalforge.evolution.factor_registry import FactorRegistry
+
+        registry = FactorRegistry().load()
+        for f in factors:
+            if "expression" in f:
+                registry.add_factor(f)
+        registry.save()
+        logger.info("Saved {} factors to registry", len(factors))
+    except Exception as exc:
+        logger.warning("Failed to save factors to registry: {}", exc)
 
 
 def _compute_rsi(series: Any, period: int) -> Any:

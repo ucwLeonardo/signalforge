@@ -342,6 +342,72 @@
     z-index: 1000;
   }
   .loading.active { display: block; }
+
+  /* Scan progress panel */
+  .scan-progress {
+    display: none;
+    background: var(--card-bg);
+    border: 1px solid var(--blue);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 4px;
+  }
+  .scan-progress.active { display: block; }
+  .scan-progress .sp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .scan-progress .sp-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--blue);
+  }
+  .scan-progress .sp-pct {
+    font-family: 'SF Mono', monospace;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .scan-progress .sp-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 10px;
+  }
+  .scan-progress .sp-bar-fill {
+    height: 100%;
+    background: var(--blue);
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .scan-progress .sp-detail {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: 'SF Mono', monospace;
+  }
+  .scan-progress .sp-symbol {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .scan-progress .sp-stage {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 500;
+    margin-left: 8px;
+  }
+  .scan-progress .sp-stage.data { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .scan-progress .sp-stage.lstm { background: rgba(163,113,247,0.15); color: #a371f7; }
+  .scan-progress .sp-stage.gbm { background: rgba(210,153,34,0.15); color: #d29922; }
+  .scan-progress .sp-stage.technical { background: rgba(63,185,80,0.15); color: var(--green); }
+  .scan-progress .sp-stage.agents { background: rgba(248,81,73,0.15); color: var(--red); }
+  .scan-progress .sp-stage.ensemble { background: rgba(255,255,255,0.1); color: var(--text); }
+  .scan-progress .sp-stage.done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .scan-progress .sp-stage.complete { background: var(--green); color: #fff; }
   @keyframes loading-slide {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(100%); }
@@ -374,10 +440,73 @@
 <header>
   <h1>SignalForge Paper Trading</h1>
   <div class="controls">
+    <select id="account-selector" class="btn btn-sm" style="padding:4px 8px;font-size:13px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);min-width:120px;" onchange="switchAccount(this.value)">
+      <option value="default">default</option>
+    </select>
+    <button class="btn btn-sm btn-green" onclick="showCreateAccountModal()" title="New Account">+ New</button>
+    <div style="position:relative;display:inline-block;">
+      <button class="btn btn-sm btn-primary" onclick="toggleAutoBuildMenu()" title="Run pipeline to analyze all assets and generate trade signals">Auto Build &#9662;</button>
+      <div id="ab-menu" style="display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px;z-index:100;min-width:220px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;">Asset Categories</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-bottom:4px;">
+          <input type="checkbox" class="ab-cat" value="us_stocks" checked> US Stocks
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-bottom:4px;">
+          <input type="checkbox" class="ab-cat" value="crypto" checked> Crypto
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-bottom:4px;">
+          <input type="checkbox" class="ab-cat" value="futures"> Futures
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-bottom:8px;">
+          <input type="checkbox" class="ab-cat" value="options"> Options
+        </label>
+        <button class="btn btn-sm btn-primary" style="width:100%;" onclick="startScan()">Start Scan</button>
+      </div>
+    </div>
+    <button class="btn btn-sm btn-red" onclick="resetCurrentAccount()" title="Reset Account">Reset</button>
+    <button class="btn btn-sm" style="background:rgba(248,81,73,0.3);color:#f85149;border-color:rgba(248,81,73,0.5);" onclick="deleteCurrentAccount()" title="Delete Account">Delete</button>
     <span class="status" id="last-updated">--</span>
     <button class="btn btn-sm" onclick="refreshAll()">Refresh</button>
   </div>
 </header>
+
+<!-- Create Account Modal -->
+<div id="create-account-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:999;display:none;align-items:center;justify-content:center;">
+  <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:24px;min-width:380px;max-width:500px;">
+    <h3 style="margin-bottom:16px;font-size:16px;">Create New Account</h3>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="form-group">
+        <label>Account Name</label>
+        <input type="text" id="ca-name" placeholder="e.g. crypto, us-stocks" style="width:100%;">
+      </div>
+      <div class="form-group">
+        <label>Initial Balance (USD)</label>
+        <input type="number" id="ca-balance" value="5000" step="100" style="width:100%;">
+      </div>
+      <div class="form-group">
+        <label>Asset Categories (for signal filtering)</label>
+        <div id="ca-categories" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;">
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;text-transform:none;letter-spacing:0;">
+            <input type="checkbox" value="us_stocks" checked> US Stocks
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;text-transform:none;letter-spacing:0;">
+            <input type="checkbox" value="crypto" checked> Crypto
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;text-transform:none;letter-spacing:0;">
+            <input type="checkbox" value="futures"> Futures
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer;text-transform:none;letter-spacing:0;">
+            <input type="checkbox" value="options"> Options
+          </label>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+        <button class="btn btn-sm" onclick="hideCreateAccountModal()">Cancel</button>
+        <button class="btn btn-sm btn-green" onclick="submitCreateAccount()">Create</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="container">
   <!-- A) Summary Bar -->
@@ -409,7 +538,27 @@
     </div>
   </div>
 
-  <!-- B) Account Value Chart -->
+  <!-- B) Scan Progress -->
+  <div class="scan-progress" id="scan-progress">
+    <div class="sp-header">
+      <span class="sp-title" id="sp-title">Auto Build: Scanning...</span>
+      <span class="sp-pct" id="sp-pct">0%</span>
+    </div>
+    <div class="sp-bar"><div class="sp-bar-fill" id="sp-bar-fill" style="width:0%"></div></div>
+    <div class="sp-detail">
+      <span class="sp-symbol" id="sp-symbol">--</span>
+      <span class="sp-stage" id="sp-stage">--</span>
+      <span id="sp-detail"></span>
+    </div>
+    <div style="margin-top:8px;">
+      <span class="collapsible-toggle" id="sp-log-toggle" onclick="toggleScanLog()" style="font-size:12px;color:var(--text-muted);cursor:pointer;">
+        <span class="arrow" style="font-size:10px;">&#9654;</span> Details
+      </span>
+      <div id="sp-log" style="display:none;margin-top:6px;max-height:200px;overflow-y:auto;font-size:11px;font-family:'SF Mono',monospace;color:var(--text-muted);line-height:1.6;padding:8px;background:var(--bg);border-radius:4px;"></div>
+    </div>
+  </div>
+
+  <!-- C) Account Value Chart -->
   <div class="card">
     <div class="card-header">Account Value</div>
     <div class="card-body">
@@ -503,6 +652,7 @@
   let history = [];
   let valueChart = null;
   let refreshTimer = null;
+  let currentAccount = 'default';
 
   // --- Utilities ---
   function fmt(n, decimals) {
@@ -555,14 +705,21 @@
   }
 
   // --- API ---
+  function _appendAccount(path) {
+    var sep = path.indexOf('?') === -1 ? '?' : '&';
+    return path + sep + 'account=' + encodeURIComponent(currentAccount);
+  }
+
   async function apiGet(path) {
-    const res = await fetch(path);
+    var url = _appendAccount(path);
+    const res = await fetch(url);
     if (!res.ok) throw new Error('GET ' + path + ' failed: ' + res.status);
     return res.json();
   }
 
   async function apiPost(path, body) {
-    const res = await fetch(path, {
+    var url = _appendAccount(path);
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -574,6 +731,270 @@
     }
     return res.json();
   }
+
+  // --- Account Management ---
+  async function fetchAccounts() {
+    try {
+      var data = await fetch('/api/accounts').then(function(r) { return r.json(); });
+      var sel = document.getElementById('account-selector');
+      var prev = currentAccount;
+      sel.innerHTML = '';
+      (data.accounts || []).forEach(function(a) {
+        var opt = document.createElement('option');
+        opt.value = a.name;
+        opt.textContent = a.name + ' ($' + fmt(a.total_value) + ')';
+        if (a.name === prev) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      // If current account no longer exists, switch to first available
+      if (sel.value !== prev && data.accounts.length > 0) {
+        currentAccount = sel.value;
+      }
+    } catch (e) { console.warn('Failed to fetch accounts:', e); }
+  }
+
+  window.switchAccount = function(name) {
+    currentAccount = name;
+    // Destroy chart so it gets rebuilt for new account
+    if (valueChart) { valueChart.destroy(); valueChart = null; }
+    refreshAll();
+  };
+
+  window.showCreateAccountModal = function() {
+    var modal = document.getElementById('create-account-modal');
+    modal.style.display = 'flex';
+    document.getElementById('ca-name').value = '';
+    document.getElementById('ca-balance').value = '5000';
+    document.getElementById('ca-name').focus();
+  };
+
+  window.hideCreateAccountModal = function() {
+    document.getElementById('create-account-modal').style.display = 'none';
+  };
+
+  window.submitCreateAccount = async function(autoBuild) {
+    var name = document.getElementById('ca-name').value.trim();
+    var balance = parseFloat(document.getElementById('ca-balance').value);
+    if (!name) { showToast('Enter an account name', 'error'); return; }
+    if (isNaN(balance) || balance <= 0) { showToast('Enter a valid balance', 'error'); return; }
+
+    // Collect selected categories
+    var cats = [];
+    document.querySelectorAll('#ca-categories input[type=checkbox]:checked').forEach(function(cb) {
+      cats.push(cb.value);
+    });
+    var topN = parseInt(document.getElementById('ca-topn').value) || 5;
+
+    try {
+      await fetch('/api/accounts/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, balance: balance, asset_categories: cats })
+      }).then(function(r) {
+        if (!r.ok) return r.json().then(function(j) { throw new Error(j.error || 'Failed'); });
+        return r.json();
+      });
+      hideCreateAccountModal();
+      currentAccount = name;
+      await fetchAccounts();
+      document.getElementById('account-selector').value = name;
+      if (valueChart) { valueChart.destroy(); valueChart = null; }
+
+      showToast('Account "' + name + '" created');
+      await refreshAll();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  var _scanLog = [];
+  var _lastLogEntry = '';
+
+  function _updateProgressPanel(s) {
+    var panel = document.getElementById('scan-progress');
+    var pct = s.total > 0 ? Math.round(s.completed / s.total * 100) : 0;
+    document.getElementById('sp-pct').textContent = pct + '%';
+    document.getElementById('sp-bar-fill').style.width = pct + '%';
+    document.getElementById('sp-symbol').textContent = s.symbol || '--';
+
+    var stageEl = document.getElementById('sp-stage');
+    var stageNames = {
+      data: 'Downloading', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
+      agents: 'TradingAgents', ensemble: 'Combining', done: 'Done', complete: 'Complete',
+      starting: 'Starting', error: 'Error'
+    };
+    stageEl.textContent = stageNames[s.stage] || s.stage || '--';
+    stageEl.className = 'sp-stage ' + (s.stage || '');
+
+    var stagesPerAsset = 5; // data, lstm, gbm, technical, ensemble
+    var totalSteps = s.total * stagesPerAsset;
+    var stageIdx = {data:0, lstm:1, gbm:2, technical:3, ensemble:4, done:5, complete:5}[s.stage] || 0;
+    var currentSteps = s.completed * stagesPerAsset + (s.stage === 'done' || s.stage === 'complete' ? 0 : stageIdx);
+    pct = totalSteps > 0 ? Math.round(currentSteps / totalSteps * 100) : 0;
+    document.getElementById('sp-pct').textContent = pct + '%';
+    document.getElementById('sp-bar-fill').style.width = pct + '%';
+
+    var phaseNames = {data:'Downloading data',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',error:'Error'};
+    var title = s.total > 0
+      ? 'Auto Build: ' + (s.stage === 'complete' ? 'Complete' : (phaseNames[s.stage] || s.stage) + ' (' + (s.completed + 1) + '/' + s.total + ')')
+      : 'Auto Build: Starting...';
+    document.getElementById('sp-title').textContent = title;
+    document.getElementById('sp-detail').textContent = s.detail ? ' — ' + s.detail : '';
+    panel.classList.add('active');
+
+    // Append to log if new entry
+    var entry = (s.symbol || '') + ' | ' + (stageNames[s.stage] || s.stage) + ' | ' + (s.detail || '');
+    if (entry !== _lastLogEntry && s.stage) {
+      var time = new Date().toLocaleTimeString('en-US', { timeZone: TZ, hour12: false });
+      var color = {data:'#58a6ff',lstm:'#a371f7',gbm:'#d29922',technical:'#3fb950',agents:'#f85149',ensemble:'#8b949e',done:'#3fb950',complete:'#3fb950',error:'#f85149'}[s.stage] || '#8b949e';
+      _scanLog.push('<span style="color:#8b949e">' + time + '</span> '
+        + (s.symbol ? '<span style="color:#e6edf3;font-weight:600">' + escHtml(s.symbol) + '</span> ' : '')
+        + '<span style="color:' + color + '">[' + (stageNames[s.stage] || s.stage) + ']</span> '
+        + escHtml(s.detail || ''));
+      _lastLogEntry = entry;
+      var logEl = document.getElementById('sp-log');
+      logEl.innerHTML = _scanLog.join('<br>');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+
+  function _hideProgressPanel() {
+    // Keep visible for a moment so user can review
+    setTimeout(function() {
+      document.getElementById('scan-progress').classList.remove('active');
+      _scanLog = [];
+      _lastLogEntry = '';
+    }, 8000);
+  }
+
+  var _syncedLogCount = 0;
+  function _syncServerLog(serverLog) {
+    if (serverLog.length <= _syncedLogCount) return;
+    var stageNames = {data:'Downloading',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',error:'Error'};
+    var stageColors = {data:'#58a6ff',lstm:'#a371f7',gbm:'#d29922',technical:'#3fb950',agents:'#f85149',ensemble:'#8b949e',done:'#3fb950',complete:'#3fb950',error:'#f85149'};
+    var newEntries = serverLog.slice(_syncedLogCount);
+    newEntries.forEach(function(e) {
+      var color = stageColors[e.stage] || '#8b949e';
+      _scanLog.push(
+        '<span style="color:#8b949e">' + escHtml(e.ts) + '</span> '
+        + (e.symbol ? '<span style="color:#e6edf3;font-weight:600">' + escHtml(e.symbol) + '</span> ' : '')
+        + '<span style="color:' + color + '">[' + (stageNames[e.stage] || e.stage) + ']</span> '
+        + escHtml(e.detail || '')
+      );
+    });
+    _syncedLogCount = serverLog.length;
+    var logEl = document.getElementById('sp-log');
+    logEl.innerHTML = _scanLog.join('<br>');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  window.toggleScanLog = function() {
+    var logEl = document.getElementById('sp-log');
+    var toggle = document.getElementById('sp-log-toggle');
+    var visible = logEl.style.display !== 'none';
+    logEl.style.display = visible ? 'none' : 'block';
+    toggle.classList.toggle('open', !visible);
+  };
+
+  window.toggleAutoBuildMenu = function() {
+    var menu = document.getElementById('ab-menu');
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  };
+
+  // Close menu when clicking outside
+  document.addEventListener('click', function(e) {
+    var menu = document.getElementById('ab-menu');
+    if (menu && menu.style.display === 'block' && !e.target.closest('#ab-menu') && !e.target.closest('[onclick*="toggleAutoBuildMenu"]')) {
+      menu.style.display = 'none';
+    }
+  });
+
+  window.startScan = async function() {
+    var catList = [];
+    document.querySelectorAll('.ab-cat:checked').forEach(function(cb) { catList.push(cb.value); });
+    if (catList.length === 0) { showToast('Select at least one category', 'error'); return; }
+    document.getElementById('ab-menu').style.display = 'none';
+
+    _scanLog = []; _lastLogEntry = ''; _syncedLogCount = 0;
+    _updateProgressPanel({ total: 0, completed: 0, symbol: '', stage: 'starting', detail: 'Sending request...' });
+    try {
+      var res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categories: catList })
+      });
+      if (!res.ok) {
+        var err = await res.json().catch(function() { return {}; });
+        throw new Error(err.error || 'Scan failed: ' + res.status);
+      }
+      // Poll for detailed progress every 2s
+      var pollInterval = setInterval(async function() {
+        try {
+          var s = await fetch('/api/scan/status').then(function(r) { return r.json(); });
+          _updateProgressPanel(s);
+          // Sync server-side log to panel
+          if (s.log && s.log.length > 0) {
+            _syncServerLog(s.log);
+          }
+          if (!s.running) {
+            clearInterval(pollInterval);
+            if (s.error) {
+              showToast('Scan failed: ' + s.error, 'error');
+            } else {
+              showToast('Scan complete: ' + (s.count || 0) + ' signals');
+              await refreshAll();
+              _hideProgressPanel();
+            }
+          }
+        } catch (e) { /* ignore poll errors */ }
+      }, 2000);
+    } catch (e) {
+      showToast(e.message, 'error');
+      _hideProgressPanel();
+    }
+  };
+
+  window.resetCurrentAccount = async function() {
+    if (!confirm('Reset account "' + currentAccount + '"?\n\nAll positions and trades will be cleared. Balance will reset to initial value.')) return;
+    try {
+      await fetch('/api/accounts/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentAccount })
+      }).then(function(r) {
+        if (!r.ok) return r.json().then(function(j) { throw new Error(j.error || 'Failed'); });
+        return r.json();
+      });
+      if (valueChart) { valueChart.destroy(); valueChart = null; }
+      await fetchAccounts();
+      await refreshAll();
+      showToast('Account "' + currentAccount + '" reset');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  window.deleteCurrentAccount = async function() {
+    if (!confirm('DELETE account "' + currentAccount + '"?\n\nThis is permanent and cannot be undone!')) return;
+    try {
+      await fetch('/api/accounts/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentAccount })
+      }).then(function(r) {
+        if (!r.ok) return r.json().then(function(j) { throw new Error(j.error || 'Failed'); });
+        return r.json();
+      });
+      showToast('Account "' + currentAccount + '" deleted');
+      currentAccount = 'default';
+      if (valueChart) { valueChart.destroy(); valueChart = null; }
+      await fetchAccounts();
+      document.getElementById('account-selector').value = 'default';
+      await refreshAll();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
 
   // --- Live Price Fetching ---
   // Crypto: CoinGecko API (CORS-friendly, real-time)
@@ -656,6 +1077,8 @@
   async function refreshAll() {
     showLoading(true);
     try {
+      // 0. Refresh account list
+      await fetchAccounts();
       // 1. Load data immediately (fast)
       await Promise.all([fetchPortfolio(), fetchSignals(), fetchHistory()]);
       document.getElementById('last-updated').textContent =
@@ -1096,6 +1519,36 @@
   // --- Init ---
   refreshAll();
   refreshTimer = setInterval(refreshAll, 30000);
+
+  // Resume progress panel if a scan is already running
+  (async function _checkRunningScan() {
+    try {
+      var s = await fetch('/api/scan/status').then(function(r) { return r.json(); });
+      if (s.running) {
+        _scanLog = []; _lastLogEntry = ''; _syncedLogCount = 0;
+        _updateProgressPanel(s);
+        if (s.log) _syncServerLog(s.log);
+        // Start polling
+        var pollInterval = setInterval(async function() {
+          try {
+            var st = await fetch('/api/scan/status').then(function(r) { return r.json(); });
+            _updateProgressPanel(st);
+            if (st.log) _syncServerLog(st.log);
+            if (!st.running) {
+              clearInterval(pollInterval);
+              if (st.error) {
+                showToast('Scan failed: ' + st.error, 'error');
+              } else {
+                showToast('Scan complete: ' + (st.count || 0) + ' signals');
+                await refreshAll();
+                _hideProgressPanel();
+              }
+            }
+          } catch (e) {}
+        }, 2000);
+      }
+    } catch (e) {}
+  })();
 })();
 </script>
 </body>

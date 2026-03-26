@@ -1,159 +1,246 @@
-"""Signal generator using live prices from Google Finance via Playwright,
-with realistic technical analysis rationales for paper trading demo."""
+"""Signal generation for paper trading — uses the real SignalForge pipeline
+(LSTM, GBM, Technical, TradingAgents) with incremental data fetching."""
 
 from __future__ import annotations
+
+import sys
 
 from signalforge.data.models import TradeAction, TradeTarget
 
 
-def _compute_rr(entry: float, target: float, stop: float) -> float:
-    """Compute risk-reward ratio."""
-    risk = abs(entry - stop)
-    reward = abs(target - entry)
-    return round(reward / risk, 2) if risk > 0 else 0.0
+def _get_symbols_for_categories(
+    categories: list[str],
+    config: "Config | None" = None,
+) -> list[str]:
+    """Get symbol list from config filtered by requested categories."""
+    if config is None:
+        from signalforge.config import load_config
+        config = load_config()
+
+    symbols: list[str] = []
+    if "us_stocks" in categories:
+        symbols.extend(config.us_stocks)
+    if "crypto" in categories:
+        symbols.extend(config.crypto)
+    if "futures" in categories:
+        symbols.extend(config.futures)
+    if "options" in categories:
+        symbols.extend(config.options)
+    return symbols
 
 
-def generate_signals_from_prices(
-    prices: dict[str, float],
+def generate_real_signals(
+    categories: list[str] | None = None,
+    config: "Config | None" = None,
+    progress_cb: "Callable[[dict], None] | None" = None,
 ) -> list[TradeTarget]:
-    """Generate TradeTarget signals from a dict of {symbol: current_price}.
+    """Generate signals using the real pipeline (LSTM, GBM, Technical, TradingAgents).
 
-    Uses simple technical heuristics to create realistic signals:
-    - BUY: entry at current price, target +5-8%, stop -4-5%
-    - SELL: entry at current price, target -5-8%, stop +4-5%
+    Uses incremental data fetching — first run downloads full history,
+    subsequent runs only fetch new bars.
+
+    Returns signals sorted by confidence descending.
     """
-    # Signal templates keyed by symbol with direction hints and rationale
-    _TEMPLATES: dict[str, dict] = {
-        "NVDA": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.07,
-            "stop_pct": 0.04,
-            "confidence": 0.82,
-            "rationale": (
-                "Kronos predicts bullish breakout; Qlib alpha158 scores +0.72; "
-                "MACD bullish crossover on daily; AI chip demand accelerating"
-            ),
-        },
-        "AAPL": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.055,
-            "stop_pct": 0.035,
-            "confidence": 0.76,
-            "rationale": (
-                "Strong support holding; Chronos forecasts upside within 5 days; "
-                "RSI bouncing from oversold zone; services revenue growth"
-            ),
-        },
-        "MSFT": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.06,
-            "stop_pct": 0.035,
-            "confidence": 0.71,
-            "rationale": (
-                "Cloud revenue acceleration; Kronos and Qlib both bullish; "
-                "price consolidating above 50-day MA; Copilot monetization"
-            ),
-        },
-        "TSLA": {
-            "action": TradeAction.SELL,
-            "target_pct": 0.065,
-            "stop_pct": 0.04,
-            "confidence": 0.65,
-            "rationale": (
-                "Overbought RSI at 74; TradingAgents bear consensus; "
-                "resistance with declining volume; margin pressure"
-            ),
-        },
-        "AMZN": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.06,
-            "stop_pct": 0.035,
-            "confidence": 0.68,
-            "rationale": (
-                "AWS growth reacceleration; support level holding; "
-                "Qlib momentum factors positive; advertising revenue surge"
-            ),
-        },
-        "BTC/USDT": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.08,
-            "stop_pct": 0.05,
-            "confidence": 0.72,
-            "rationale": (
-                "Halving cycle momentum; Chronos probabilistic forecast bullish; "
-                "institutional accumulation via ETFs; Morgan Stanley ETF imminent"
-            ),
-        },
-        "ETH/USDT": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.08,
-            "stop_pct": 0.05,
-            "confidence": 0.64,
-            "rationale": (
-                "ETH/BTC ratio at multi-year low suggesting mean reversion; "
-                "Bollinger squeeze indicating imminent breakout"
-            ),
-        },
-        "SOL/USDT": {
-            "action": TradeAction.BUY,
-            "target_pct": 0.09,
-            "stop_pct": 0.06,
-            "confidence": 0.61,
-            "rationale": (
-                "DeFi TVL rising on Solana; AI agent infrastructure narrative; "
-                "Western Union stablecoin launch catalyst; Chronos bullish"
-            ),
-        },
-    }
+    from signalforge.config import load_config
+    from signalforge.pipeline import run_pipeline
 
-    results: list[TradeTarget] = []
-    for symbol, price in prices.items():
-        tmpl = _TEMPLATES.get(symbol)
-        if tmpl is None:
+    if config is None:
+        config = load_config()
+    if categories is None:
+        categories = ["us_stocks", "crypto"]
+
+    symbols = _get_symbols_for_categories(categories, config)
+    if not symbols:
+        return []
+
+    sys.stderr.write(
+        f"[SignalForge] Generating signals for {len(symbols)} assets "
+        f"(categories: {', '.join(categories)})...\n"
+    )
+
+    targets = run_pipeline(
+        symbols=symbols,
+        config=config,
+        use_store=True,
+        progress_cb=progress_cb,
+    )
+
+    # Sort by confidence descending
+    targets.sort(key=lambda t: (t.confidence, t.risk_reward_ratio), reverse=True)
+
+    sys.stderr.write(
+        f"[SignalForge] Generated {len(targets)} signals from {len(symbols)} assets\n"
+    )
+    return targets
+
+
+def generate_live_signals(
+    categories: list[str] | None = None,
+) -> list[TradeTarget]:
+    """Generate signals using the real pipeline. Alias for generate_real_signals."""
+    return generate_real_signals(categories=categories)
+
+
+# ---------------------------------------------------------------------------
+# Symbol classification for category filtering
+# ---------------------------------------------------------------------------
+
+def _classify_symbol_category(symbol: str) -> str:
+    """Classify a symbol into asset category using the pipeline's classifier."""
+    from signalforge.pipeline import _classify_symbol
+
+    sym_type = _classify_symbol(symbol)
+    # Map pipeline type names to config category names
+    return {"stock": "us_stocks", "crypto": "crypto", "futures": "futures", "options": "options"}.get(
+        sym_type, "us_stocks"
+    )
+
+
+def filter_signals_by_categories(
+    signals: list[TradeTarget],
+    categories: list[str],
+) -> list[TradeTarget]:
+    """Filter signals to only include symbols in the given categories."""
+    return [s for s in signals if _classify_symbol_category(s.symbol) in categories]
+
+
+# ---------------------------------------------------------------------------
+# Portfolio allocation algorithms
+# ---------------------------------------------------------------------------
+
+def _kelly_allocate(
+    signals: list[TradeTarget],
+    total_budget_pct: float = 80.0,
+    max_single_pct: float = 30.0,
+    short_budget_pct: float = 10.0,
+) -> dict[str, float]:
+    """Allocate using a half-Kelly criterion based on signal confidence and R:R.
+
+    The Kelly fraction for each signal is:
+        f = confidence * (rr_ratio - 1) / rr_ratio
+
+    where rr_ratio = risk_reward_ratio. This is the edge/odds formula from
+    the Kelly criterion, adapted for trading signals.
+
+    We use half-Kelly (f/2) for conservatism, then normalize so total
+    allocation = total_budget_pct (default 80%, keeping 20% cash reserve).
+
+    BUY signals share the main budget; SELL signals get a smaller short budget.
+    Each position is capped at max_single_pct.
+    """
+    buy_signals = [s for s in signals if s.action == TradeAction.BUY]
+    sell_signals = [s for s in signals if s.action == TradeAction.SELL]
+
+    if not buy_signals and not sell_signals:
+        return {}
+
+    alloc: dict[str, float] = {}
+
+    # --- BUY allocation via half-Kelly ---
+    if buy_signals:
+        kelly_scores: dict[str, float] = {}
+        for s in buy_signals:
+            rr = max(s.risk_reward_ratio, 0.01)
+            # Kelly: f = p * (b-1)/b  where p=confidence, b=rr_ratio
+            # For b>1 (favorable R:R), f is positive
+            f = s.confidence * (rr - 1) / rr if rr > 1 else s.confidence * 0.1
+            kelly_scores[s.symbol] = max(f / 2, 0.01)  # half-Kelly, floor at 1%
+
+        total_score = sum(kelly_scores.values())
+        for sym, score in kelly_scores.items():
+            pct = (score / total_score) * total_budget_pct
+            alloc[sym] = round(min(pct, max_single_pct), 1)
+
+    # --- SELL allocation (small fixed budget) ---
+    if sell_signals:
+        per_short = short_budget_pct / len(sell_signals)
+        for s in sell_signals:
+            alloc[s.symbol] = round(min(per_short, 10.0), 1)
+
+    return alloc
+
+
+def auto_build_portfolio(
+    manager: "PortfolioManager",
+    categories: list[str],
+    top_n: int = 5,
+    **_kwargs: object,
+) -> dict:
+    """Auto-build a portfolio: generate signals → top N by confidence → Kelly allocation → open positions.
+
+    Signal selection uses the project's existing engines (confidence-ranked).
+    Allocation uses the half-Kelly criterion based on each signal's confidence and R:R ratio.
+
+    Returns a summary dict of what was done.
+    """
+    from signalforge.paper.portfolio import PortfolioManager
+
+    portfolio = manager.load()
+    balance = portfolio.cash
+
+    # 1. Generate real signals via pipeline (already sorted by confidence desc)
+    all_signals = generate_real_signals(categories=categories)
+    if not all_signals:
+        return {"error": "No signals for selected categories", "positions_opened": []}
+
+    # 2. Take top N by confidence (signals are pre-sorted)
+    signals = all_signals[:top_n]
+
+    # 4. Allocate via half-Kelly criterion
+    allocation = _kelly_allocate(signals)
+    allocation_method = "half_kelly"
+
+    if not allocation:
+        return {"error": "Could not determine allocation", "positions_opened": []}
+
+    # 3. Open positions
+    opened = []
+    errors = []
+    for signal in signals:
+        pct = allocation.get(signal.symbol)
+        if not pct or pct <= 0:
             continue
 
-        action = tmpl["action"]
-        if action == TradeAction.BUY:
-            entry = round(price, 2)
-            target = round(price * (1 + tmpl["target_pct"]), 2)
-            stop = round(price * (1 - tmpl["stop_pct"]), 2)
-        else:  # SELL
-            entry = round(price, 2)
-            target = round(price * (1 - tmpl["target_pct"]), 2)
-            stop = round(price * (1 + tmpl["stop_pct"]), 2)
+        amount = balance * (pct / 100)
+        entry = signal.entry_price
+        if entry <= 0:
+            continue
 
-        results.append(
-            TradeTarget(
-                symbol=symbol,
-                action=action,
+        # Calculate quantity
+        raw_qty = amount / entry
+        is_crypto = "/" in signal.symbol
+        qty = round(raw_qty, 6) if is_crypto else int(raw_qty)
+        if qty <= 0:
+            continue
+
+        side = "short" if signal.action == TradeAction.SELL else "long"
+        try:
+            pos = manager.open_position(
+                symbol=signal.symbol,
+                side=side,
+                qty=qty,
                 entry_price=entry,
-                target_price=target,
-                stop_loss=stop,
-                risk_reward_ratio=_compute_rr(entry, target, stop),
-                confidence=tmpl["confidence"],
-                horizon_days=5,
-                rationale=tmpl["rationale"],
+                stop_loss=signal.stop_loss,
+                target_price=signal.target_price,
             )
-        )
+            opened.append({
+                "symbol": pos.symbol,
+                "side": side,
+                "qty": pos.qty,
+                "entry_price": entry,
+                "allocation_pct": pct,
+                "cost": round(qty * entry, 2),
+            })
+        except ValueError as exc:
+            errors.append({"symbol": signal.symbol, "error": str(exc)})
 
-    results.sort(key=lambda t: (t.confidence, t.risk_reward_ratio), reverse=True)
-    return results
-
-
-# Fallback: hardcoded live prices as of 2026-03-26 03:55 UTC
-# (fetched via Playwright from Google Finance)
-LIVE_PRICES_20260326: dict[str, float] = {
-    "NVDA": 178.68,
-    "AAPL": 252.62,
-    "MSFT": 371.04,
-    "TSLA": 385.95,
-    "AMZN": 211.71,
-    "BTC/USDT": 70860.49,
-    "ETH/USDT": 2152.22,
-    "SOL/USDT": 90.99,
-}
-
-
-def generate_live_signals() -> list[TradeTarget]:
-    """Generate signals using the latest live prices."""
-    return generate_signals_from_prices(LIVE_PRICES_20260326)
+    portfolio = manager.load()
+    return {
+        "allocation_method": allocation_method,
+        "allocation": allocation,
+        "positions_opened": opened,
+        "errors": errors,
+        "cash_remaining": round(portfolio.cash, 2),
+        "total_value": round(portfolio.total_value, 2),
+        "all_signals": all_signals,  # full signal list for server to cache
+    }

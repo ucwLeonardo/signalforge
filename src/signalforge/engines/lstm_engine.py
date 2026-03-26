@@ -12,6 +12,7 @@ to a simple exponential-weighted moving average baseline.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -40,6 +41,8 @@ class LSTMConfig:
         lr: Learning rate for Adam optimiser.
         mc_samples: Number of MC Dropout forward passes for confidence.
         device: PyTorch device string.
+        model_dir: Directory for persisted model checkpoints.
+        finetune_epochs: Epochs for incremental fine-tuning of a saved model.
     """
 
     enabled: bool = False
@@ -51,6 +54,8 @@ class LSTMConfig:
     lr: float = 1e-3
     mc_samples: int = 20
     device: str = "cuda"
+    model_dir: str = "~/.signalforge/models/lstm"
+    finetune_epochs: int = 10
 
 
 # ---------------------------------------------------------------------------
@@ -281,8 +286,57 @@ class LSTMEngine(PredictionEngine):
     def config(self) -> LSTMConfig:
         return self._config
 
-    def predict(self, df: pd.DataFrame, pred_len: int | None = None) -> pd.DataFrame:
+    @staticmethod
+    def _safe_symbol(symbol: str) -> str:
+        """Sanitize a symbol string for use as a filename."""
+        return symbol.replace("/", "-")
+
+    def save_model(
+        self,
+        symbol: str,
+        model: Any,
+        means: np.ndarray,
+        stds: np.ndarray,
+        config_meta: dict[str, Any],
+    ) -> Path:
+        """Persist model state_dict, normalization params, and metadata."""
+        import torch
+
+        model_dir = Path(self._config.model_dir).expanduser()
+        model_dir.mkdir(parents=True, exist_ok=True)
+        path = model_dir / f"{self._safe_symbol(symbol)}.pt"
+        torch.save(
+            {
+                "state_dict": model.state_dict(),
+                "means": means,
+                "stds": stds,
+                "config_meta": config_meta,
+            },
+            path,
+        )
+        logger.info("Saved LSTM model for {} to {}", symbol, path)
+        return path
+
+    def load_model(self, symbol: str) -> dict[str, Any] | None:
+        """Load a previously saved model checkpoint, or return None."""
+        import torch
+
+        model_dir = Path(self._config.model_dir).expanduser()
+        path = model_dir / f"{self._safe_symbol(symbol)}.pt"
+        if not path.exists():
+            return None
+        checkpoint = torch.load(path, map_location=self._device, weights_only=False)
+        logger.info("Loaded LSTM model for {} from {}", symbol, path)
+        return checkpoint
+
+    def predict(self, df: pd.DataFrame, pred_len: int | None = None, symbol: str | None = None) -> pd.DataFrame:
         """Train on *df* and forecast *pred_len* future OHLCV candles.
+
+        Parameters
+        ----------
+        symbol : optional symbol identifier used for model persistence.
+            When provided, the engine will load/save models and use
+            incremental fine-tuning if a checkpoint already exists.
 
         Returns a DataFrame with columns:
         ``timestamp, open, high, low, close, volume, confidence``.
@@ -312,7 +366,7 @@ class LSTMEngine(PredictionEngine):
             return self._build_result(future_ts, preds, confidence=0.3)
 
         try:
-            preds, confidence = self._predict_lstm(prepared, horizon)
+            preds, confidence = self._predict_lstm(prepared, horizon, symbol=symbol)
         except Exception:
             logger.exception("LSTM prediction failed -- falling back to EWMA.")
             preds = _ewma_baseline(prepared, horizon)
@@ -324,6 +378,8 @@ class LSTMEngine(PredictionEngine):
         self,
         df: pd.DataFrame,
         pred_len: int,
+        *,
+        symbol: str | None = None,
     ) -> tuple[dict[str, np.ndarray], float]:
         """Train LSTM and predict with MC Dropout confidence."""
         import torch
@@ -363,12 +419,31 @@ class LSTMEngine(PredictionEngine):
             pred_len=pred_len,
         ).to(device)
 
+        # Determine training epochs: load saved model for fine-tuning or train from scratch
+        checkpoint = self.load_model(symbol) if symbol is not None else None
+        if checkpoint is not None:
+            model.load_state_dict(checkpoint["state_dict"])
+            train_epochs = cfg.finetune_epochs
+            logger.info(
+                "Fine-tuning saved model for {} ({} epochs)",
+                symbol,
+                train_epochs,
+            )
+        else:
+            train_epochs = cfg.epochs
+            if symbol is not None:
+                logger.info(
+                    "No saved model for {} -- training from scratch ({} epochs)",
+                    symbol,
+                    train_epochs,
+                )
+
         optimiser = torch.optim.Adam(model.parameters(), lr=cfg.lr)
         loss_fn = nn.MSELoss()
 
         # Training loop
         model.train()
-        for epoch in range(cfg.epochs):
+        for epoch in range(train_epochs):
             optimiser.zero_grad()
             output = model(X_train_t)
             loss = loss_fn(output, Y_train_t)
@@ -376,7 +451,18 @@ class LSTMEngine(PredictionEngine):
             optimiser.step()
 
             if epoch % 20 == 0:
-                logger.debug("LSTM epoch {}/{}: loss={:.6f}", epoch, cfg.epochs, loss.item())
+                logger.debug("LSTM epoch {}/{}: loss={:.6f}", epoch, train_epochs, loss.item())
+
+        # Persist model if symbol provided
+        if symbol is not None:
+            config_meta = {
+                "hidden_size": cfg.hidden_size,
+                "num_layers": cfg.num_layers,
+                "dropout": cfg.dropout,
+                "lookback": cfg.lookback,
+                "pred_len": pred_len,
+            }
+            self.save_model(symbol, model, means, stds, config_meta)
 
         # Inference with MC Dropout
         # Keep dropout active for uncertainty estimation
