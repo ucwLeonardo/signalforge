@@ -86,16 +86,24 @@ class PortfolioManager:
         return self.init(balance=balance or 5000.0, force=True)
 
     def load(self) -> Portfolio:
-        """Load portfolio from JSON file."""
-        with open(self._path) as f:
-            data = json.load(f)
-        return Portfolio(
-            cash=data["cash"],
-            positions=[position_from_dict(p) for p in data["positions"]],
-            trades=[trade_from_dict(t) for t in data["trades"]],
-            initial_balance=data["initial_balance"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-        )
+        """Load portfolio from JSON file. Re-initializes if file is corrupt."""
+        try:
+            with open(self._path) as f:
+                data = json.load(f)
+            return Portfolio(
+                cash=data["cash"],
+                positions=[position_from_dict(p) for p in data["positions"]],
+                trades=[trade_from_dict(t) for t in data["trades"]],
+                initial_balance=data["initial_balance"],
+                created_at=datetime.fromisoformat(data["created_at"]),
+            )
+        except (json.JSONDecodeError, KeyError) as exc:
+            # Corrupt file — re-initialize with default balance
+            import sys
+            sys.stderr.write(
+                f"[Portfolio] Corrupt portfolio at {self._path}: {exc}. Re-initializing.\n"
+            )
+            return self.init(balance=5000.0, force=True)
 
     def _save(self, portfolio: Portfolio) -> None:
         """Write portfolio to JSON file."""
