@@ -67,7 +67,10 @@ def run_pipeline(
 
         # 1. Fetch data
         try:
-            provider = get_provider(symbol)
+            provider_kwargs = {}
+            if sym_type == "crypto":
+                provider_kwargs["exchange_id"] = config.data.crypto_exchange
+            provider = get_provider(symbol, **provider_kwargs)
             end = datetime.now()
             start = end - timedelta(days=_get_lookback_days(sym_type, config))
             df = provider.fetch(symbol, interval, start, end)

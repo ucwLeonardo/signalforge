@@ -90,7 +90,7 @@ class DataConfig:
     stocks_interval: str = "1d"
     stocks_lookback_days: int = 730
     crypto_provider: str = "ccxt"
-    crypto_exchange: str = "binance"
+    crypto_exchange: str = "gate"
     crypto_interval: str = "1d"
     crypto_lookback_days: int = 730
     futures_provider: str = "yfinance"

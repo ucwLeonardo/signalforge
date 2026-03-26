@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SignalForge Paper Trading</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --card-bg: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --blue: #58a6ff;
+    --green-bg: rgba(63, 185, 80, 0.08);
+    --red-bg: rgba(248, 81, 73, 0.08);
+    --radius: 6px;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  .mono { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
+  }
+
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+
+  header .controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  header .status {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { border-color: var(--text-muted); background: #1c2129; }
+  .btn-primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .btn-primary:hover { background: #4393e6; }
+  .btn-green { background: rgba(63, 185, 80, 0.15); color: var(--green); border-color: rgba(63, 185, 80, 0.3); }
+  .btn-green:hover { background: rgba(63, 185, 80, 0.25); }
+  .btn-red { background: rgba(248, 81, 73, 0.15); color: var(--red); border-color: rgba(248, 81, 73, 0.3); }
+  .btn-red:hover { background: rgba(248, 81, 73, 0.25); }
+  .btn-sm { padding: 3px 10px; font-size: 12px; }
+
+  /* Cards */
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .card-body { padding: 18px; }
+
+  /* Summary Bar */
+  .summary-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+  }
+  .summary-item {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+  .summary-item .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .summary-item .value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 22px;
+    font-weight: 600;
+  }
+  .summary-item .value.large { font-size: 28px; }
+  .summary-item .sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .positive { color: var(--green); }
+  .negative { color: var(--red); }
+  .neutral  { color: var(--text-muted); }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.profit-row { background: var(--green-bg); }
+  tbody tr.loss-row { background: var(--red-bg); }
+
+  .side-long { color: var(--green); font-weight: 600; }
+  .side-short { color: var(--red); font-weight: 600; }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  /* Inline Forms */
+  .inline-form {
+    display: none;
+    padding: 12px 14px;
+    background: rgba(88, 166, 255, 0.04);
+    border-top: 1px solid var(--border);
+  }
+  .inline-form.active { display: block; }
+  .inline-form .form-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .form-group label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+  }
+  .form-group input, .form-group select {
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    width: 120px;
+  }
+  .form-group input:focus, .form-group select:focus {
+    outline: none;
+    border-color: var(--blue);
+  }
+  .form-group input.wide { width: 200px; }
+
+  /* Signals */
+  .signals-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 14px;
+  }
+  .signal-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .signal-card .signal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .signal-card .signal-symbol {
+    font-weight: 700;
+    font-size: 15px;
+  }
+  .signal-card .signal-action {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+  .signal-card .signal-action.buy {
+    background: rgba(63,185,80,0.15);
+    color: var(--green);
+  }
+  .signal-card .signal-action.sell {
+    background: rgba(248,81,73,0.15);
+    color: var(--red);
+  }
+  .signal-card .signal-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    font-size: 12px;
+  }
+  .signal-card .signal-metrics .metric-label {
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+  .signal-card .signal-metrics .metric-value {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 13px;
+  }
+  .signal-card .signal-rationale {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .confidence-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .confidence-bar .fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--blue);
+    transition: width 0.3s;
+  }
+
+  /* Collapsible */
+  .collapsible-toggle {
+    cursor: pointer;
+    user-select: none;
+  }
+  .collapsible-toggle .arrow {
+    display: inline-block;
+    transition: transform 0.2s;
+    margin-right: 6px;
+    font-size: 12px;
+  }
+  .collapsible-toggle.open .arrow { transform: rotate(90deg); }
+
+  /* Chart */
+  .chart-container {
+    position: relative;
+    height: 280px;
+    padding: 10px;
+  }
+
+  /* Open Position Form */
+  #open-form-panel {
+    display: none;
+  }
+  #open-form-panel.active { display: block; }
+
+  /* Totals row */
+  .totals-row td {
+    font-weight: 600;
+    border-top: 2px solid var(--border);
+    border-bottom: none;
+  }
+
+  /* Loading overlay */
+  .loading {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--blue), transparent);
+    animation: loading-slide 1s ease infinite;
+    display: none;
+    z-index: 1000;
+  }
+  .loading.active { display: block; }
+  @keyframes loading-slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    z-index: 1001;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: all 0.3s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.success { background: var(--green); color: #fff; }
+  .toast.error { background: var(--red); color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="loading" id="loading-bar"></div>
+
+<header>
+  <h1>SignalForge Paper Trading</h1>
+  <div class="controls">
+    <span class="status" id="last-updated">--</span>
+    <button class="btn btn-sm" onclick="refreshAll()">Refresh</button>
+  </div>
+</header>
+
+<div class="container">
+  <!-- A) Summary Bar -->
+  <div class="summary-bar" id="summary-bar">
+    <div class="summary-item">
+      <div class="label">Total Value</div>
+      <div class="value large mono" id="s-total-value">--</div>
+    </div>
+    <div class="summary-item">
+      <div class="label">Cash</div>
+      <div class="value mono" id="s-cash">--</div>
+    </div>
+    <div class="summary-item">
+      <div class="label">Positions Value</div>
+      <div class="value mono" id="s-positions-value">--</div>
+    </div>
+    <div class="summary-item">
+      <div class="label">Total P&amp;L</div>
+      <div class="value mono" id="s-total-pnl">--</div>
+      <div class="sub mono" id="s-total-pnl-pct">--</div>
+    </div>
+    <div class="summary-item">
+      <div class="label">Unrealized P&amp;L</div>
+      <div class="value mono" id="s-unrealized-pnl">--</div>
+    </div>
+    <div class="summary-item">
+      <div class="label">Realized P&amp;L</div>
+      <div class="value mono" id="s-realized-pnl">--</div>
+    </div>
+  </div>
+
+  <!-- B) Account Value Chart -->
+  <div class="card">
+    <div class="card-header">Account Value</div>
+    <div class="card-body">
+      <div class="chart-container">
+        <canvas id="value-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- C) Open Positions -->
+  <div class="card">
+    <div class="card-header">
+      <span>Open Positions</span>
+      <button class="btn btn-sm btn-primary" onclick="toggleOpenForm()">Open Position</button>
+    </div>
+    <div id="open-form-panel">
+      <div class="inline-form active">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Symbol</label>
+            <input type="text" id="of-symbol" placeholder="AAPL">
+          </div>
+          <div class="form-group">
+            <label>Side</label>
+            <select id="of-side">
+              <option value="long">LONG</option>
+              <option value="short">SHORT</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Qty</label>
+            <input type="number" id="of-qty" step="any" placeholder="10">
+          </div>
+          <div class="form-group">
+            <label>Entry Price</label>
+            <input type="number" id="of-entry" step="any" placeholder="150.00">
+          </div>
+          <div class="form-group">
+            <label>Stop Loss</label>
+            <input type="number" id="of-stop" step="any" placeholder="145.00">
+          </div>
+          <div class="form-group">
+            <label>Target</label>
+            <input type="number" id="of-target" step="any" placeholder="165.00">
+          </div>
+          <div class="form-group" style="justify-content: flex-end;">
+            <div style="display:flex; gap:6px;">
+              <button class="btn btn-sm btn-green" onclick="submitOpenPosition()">Submit</button>
+              <button class="btn btn-sm" onclick="toggleOpenForm()">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="positions-container">
+      <div class="empty-state">Loading positions...</div>
+    </div>
+  </div>
+
+  <!-- D) Signals -->
+  <div class="card">
+    <div class="card-header">Available Signals</div>
+    <div class="card-body">
+      <div id="signals-container">
+        <div class="empty-state">Loading signals...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- E) Trade History -->
+  <div class="card">
+    <div class="card-header collapsible-toggle" id="history-toggle" onclick="toggleHistory()">
+      <span><span class="arrow">&#9654;</span>Trade History</span>
+      <span class="mono" id="history-count" style="font-size:12px; color:var(--text-muted);"></span>
+    </div>
+    <div id="history-container" style="display:none;">
+      <div class="empty-state">Loading history...</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // --- State ---
+  let portfolio = null;
+  let signals = [];
+  let history = [];
+  let valueChart = null;
+  let refreshTimer = null;
+
+  // --- Utilities ---
+  function fmt(n, decimals) {
+    if (n == null || isNaN(n)) return '--';
+    const d = decimals != null ? decimals : 2;
+    return Number(n).toLocaleString('en-US', {
+      minimumFractionDigits: d,
+      maximumFractionDigits: d
+    });
+  }
+
+  function fmtUsd(n, decimals) {
+    if (n == null || isNaN(n)) return '--';
+    const d = decimals != null ? decimals : 2;
+    const prefix = n < 0 ? '-$' : '$';
+    return prefix + fmt(Math.abs(n), d);
+  }
+
+  function fmtPct(n) {
+    if (n == null || isNaN(n)) return '--';
+    const sign = n >= 0 ? '+' : '';
+    return sign + fmt(n, 2) + '%';
+  }
+
+  function pnlClass(n) {
+    if (n == null || n === 0) return 'neutral';
+    return n > 0 ? 'positive' : 'negative';
+  }
+
+  function showLoading(on) {
+    document.getElementById('loading-bar').classList.toggle('active', on);
+  }
+
+  function showToast(message, type) {
+    const el = document.getElementById('toast');
+    el.textContent = message;
+    el.className = 'toast ' + (type || 'success') + ' show';
+    setTimeout(function() { el.classList.remove('show'); }, 3000);
+  }
+
+  function escHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function isCrypto(symbol) {
+    return symbol && symbol.indexOf('/') !== -1;
+  }
+
+  // --- API ---
+  async function apiGet(path) {
+    const res = await fetch(path);
+    if (!res.ok) throw new Error('GET ' + path + ' failed: ' + res.status);
+    return res.json();
+  }
+
+  async function apiPost(path, body) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      let msg = 'Request failed: ' + res.status;
+      try { const j = await res.json(); msg = j.error || j.detail || msg; } catch(_) {}
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  // --- Live Price Fetching ---
+  // Crypto: CoinGecko API (CORS-friendly, real-time)
+  // Stocks: server proxy (falls back to cached when market closed)
+  const COINGECKO_MAP = {
+    'BTC/USDT': 'bitcoin',
+    'ETH/USDT': 'ethereum',
+    'SOL/USDT': 'solana',
+  };
+
+  async function fetchLivePrices() {
+    var prices = {};
+    // 1. Fetch crypto from CoinGecko (reliable, no CORS)
+    try {
+      var ids = [];
+      var symbolToId = {};
+      if (portfolio && portfolio.positions) {
+        portfolio.positions.forEach(function(p) {
+          var cgId = COINGECKO_MAP[p.symbol];
+          if (cgId) { ids.push(cgId); symbolToId[cgId] = p.symbol; }
+        });
+      }
+      // Also fetch for signals we display
+      Object.keys(COINGECKO_MAP).forEach(function(sym) {
+        var cgId = COINGECKO_MAP[sym];
+        if (ids.indexOf(cgId) === -1) { ids.push(cgId); symbolToId[cgId] = sym; }
+      });
+      if (ids.length > 0) {
+        var r = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=' + ids.join(',') + '&vs_currencies=usd',
+          {signal: AbortSignal.timeout(8000)}
+        );
+        var data = await r.json();
+        Object.keys(data).forEach(function(cgId) {
+          var sym = symbolToId[cgId];
+          if (sym && data[cgId].usd) prices[sym] = data[cgId].usd;
+        });
+      }
+    } catch (e) { console.warn('CoinGecko fetch failed:', e); }
+
+    // 2. Try server proxy for stocks (may fail if network blocked)
+    try {
+      var serverPrices = await apiGet('/api/prices');
+      if (serverPrices && serverPrices.prices) {
+        // Only use stock prices from server (crypto from CoinGecko is fresher)
+        Object.keys(serverPrices.prices).forEach(function(sym) {
+          if (!COINGECKO_MAP[sym]) prices[sym] = serverPrices.prices[sym];
+        });
+      }
+    } catch (e) { /* server proxy failed, use cached */ }
+
+    // 3. Push collected prices to server to update positions
+    if (Object.keys(prices).length > 0) {
+      try {
+        await apiPost('/api/update-prices', { prices: prices });
+      } catch (e) { console.warn('Price push failed:', e); }
+    }
+  }
+
+  // --- Data Fetching ---
+  async function fetchPortfolio() {
+    portfolio = await apiGet('/api/portfolio');
+    renderSummary();
+    renderChart();
+    renderPositions();
+  }
+
+  async function fetchSignals() {
+    signals = await apiGet('/api/signals');
+    renderSignals();
+  }
+
+  async function fetchHistory() {
+    history = await apiGet('/api/history');
+    renderHistory();
+  }
+
+  const TZ = 'Asia/Shanghai';
+
+  async function refreshAll() {
+    showLoading(true);
+    try {
+      // 1. Load data immediately (fast)
+      await Promise.all([fetchPortfolio(), fetchSignals(), fetchHistory()]);
+      document.getElementById('last-updated').textContent =
+        'Updated ' + new Date().toLocaleString('en-US', {
+          timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+        }) + ' (UTC+8)';
+    } catch (e) {
+      console.error('Refresh error:', e);
+      showToast('Failed to refresh: ' + e.message, 'error');
+    } finally {
+      showLoading(false);
+    }
+    // 2. Then update live prices in background (non-blocking)
+    try {
+      await fetchLivePrices();
+      // Re-load portfolio with updated prices
+      await fetchPortfolio();
+      document.getElementById('last-updated').textContent =
+        'Updated ' + new Date().toLocaleString('en-US', {
+          timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+        }) + ' (UTC+8)';
+    } catch (e) { /* price update is best-effort */ }
+  }
+
+  // --- Render Summary ---
+  function renderSummary() {
+    if (!portfolio) return;
+    const p = portfolio;
+    const tvEl = document.getElementById('s-total-value');
+    tvEl.textContent = fmtUsd(p.total_value);
+
+    document.getElementById('s-cash').textContent = fmtUsd(p.cash);
+    document.getElementById('s-positions-value').textContent = fmtUsd(p.positions_value);
+
+    const pnlEl = document.getElementById('s-total-pnl');
+    pnlEl.textContent = fmtUsd(p.total_pnl);
+    pnlEl.className = 'value mono ' + pnlClass(p.total_pnl);
+
+    const pctEl = document.getElementById('s-total-pnl-pct');
+    pctEl.textContent = fmtPct(p.total_pnl_pct);
+    pctEl.className = 'sub mono ' + pnlClass(p.total_pnl_pct);
+
+    const upEl = document.getElementById('s-unrealized-pnl');
+    upEl.textContent = fmtUsd(p.unrealized_pnl);
+    upEl.className = 'value mono ' + pnlClass(p.unrealized_pnl);
+
+    const rpEl = document.getElementById('s-realized-pnl');
+    rpEl.textContent = fmtUsd(p.realized_pnl);
+    rpEl.className = 'value mono ' + pnlClass(p.realized_pnl);
+  }
+
+  // --- Render Chart ---
+  function renderChart() {
+    if (!portfolio) return;
+    const vh = portfolio.value_history || [];
+    const ctx = document.getElementById('value-chart').getContext('2d');
+
+    const labels = vh.map(function(p) {
+      return new Date(p.timestamp).toLocaleString('en-US', {
+        timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+      });
+    });
+    const data = vh.map(function(p) { return p.total_value; });
+
+    if (valueChart) {
+      valueChart.data.labels = labels;
+      valueChart.data.datasets[0].data = data;
+      valueChart.data.datasets[0].pointRadius = data.length === 1 ? 5 : 0;
+      valueChart.update();
+      return;
+    }
+
+    valueChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Account Value',
+          data: data,
+          borderColor: '#3fb950',
+          backgroundColor: 'rgba(63, 185, 80, 0.08)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3,
+          pointRadius: data.length === 1 ? 5 : 0,
+          pointBackgroundColor: '#3fb950',
+          pointHoverRadius: 5,
+          pointHoverBackgroundColor: '#3fb950'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { intersect: false, mode: 'index' },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#161b22',
+            borderColor: '#30363d',
+            borderWidth: 1,
+            titleColor: '#8b949e',
+            bodyColor: '#e6edf3',
+            bodyFont: { family: "'SF Mono', 'Cascadia Code', monospace" },
+            callbacks: {
+              label: function(ctx) { return '$' + fmt(ctx.parsed.y); }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(48, 54, 61, 0.5)', drawBorder: false },
+            ticks: { color: '#8b949e', font: { size: 11 }, maxTicksLimit: 8 }
+          },
+          y: {
+            grid: { color: 'rgba(48, 54, 61, 0.5)', drawBorder: false },
+            ticks: {
+              color: '#8b949e',
+              font: { size: 11, family: "'SF Mono', 'Cascadia Code', monospace" },
+              callback: function(v) { return '$' + fmt(v, 2); }
+            },
+            // Zoom Y-axis tightly around data so small changes are visible
+            beforeFit: function(axis) {
+              var chart = axis.chart;
+              var dataset = chart.data.datasets[0];
+              if (!dataset || !dataset.data || dataset.data.length === 0) return;
+              var vals = dataset.data.filter(function(v) { return v != null; });
+              if (vals.length === 0) return;
+              var dMin = Math.min.apply(null, vals);
+              var dMax = Math.max.apply(null, vals);
+              var range = dMax - dMin;
+              var mid = (dMin + dMax) / 2;
+              // Use 0.05% of mid as minimum half-range (e.g. $2.50 for $5000)
+              var halfRange = Math.max(range * 0.6, mid * 0.0005, 0.5);
+              axis.options.min = mid - halfRange;
+              axis.options.max = mid + halfRange;
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // --- Render Positions ---
+  function renderPositions() {
+    const container = document.getElementById('positions-container');
+    const positions = portfolio ? portfolio.positions : [];
+
+    if (!positions || positions.length === 0) {
+      container.innerHTML = '<div class="empty-state">No open positions</div>';
+      return;
+    }
+
+    let html = '<table><thead><tr>' +
+      '<th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Current</th>' +
+      '<th>Target</th><th>Stop</th><th>P&L ($)</th><th>P&L (%)</th>' +
+      '<th>Entry Time</th><th>Actions</th>' +
+      '</tr></thead><tbody>';
+
+    positions.forEach(function(pos, idx) {
+      const rowClass = (pos.unrealized_pnl > 0) ? 'profit-row' : (pos.unrealized_pnl < 0 ? 'loss-row' : '');
+      const sideClass = (pos.side && pos.side.toLowerCase() === 'short') ? 'side-short' : 'side-long';
+      const sideLabel = (pos.side && pos.side.toLowerCase() === 'short') ? 'SHORT' : 'LONG';
+
+      html += '<tr class="' + rowClass + '">' +
+        '<td><strong>' + escHtml(pos.symbol) + '</strong></td>' +
+        '<td class="' + sideClass + '">' + sideLabel + '</td>' +
+        '<td class="mono">' + fmt(pos.qty, isCrypto(pos.symbol) ? 6 : 0) + '</td>' +
+        '<td class="mono">' + fmtUsd(pos.entry_price) + '</td>' +
+        '<td class="mono">' + fmtUsd(pos.current_price) + '</td>' +
+        '<td class="mono">' + fmtUsd(pos.target_price) + '</td>' +
+        '<td class="mono">' + fmtUsd(pos.stop_loss) + '</td>' +
+        '<td class="mono ' + pnlClass(pos.unrealized_pnl) + '">' + fmtUsd(pos.unrealized_pnl) + '</td>' +
+        '<td class="mono ' + pnlClass(pos.pnl_pct) + '">' + fmtPct(pos.pnl_pct) + '</td>' +
+        '<td class="mono" style="font-size:12px;color:var(--text-muted)">' +
+          (pos.opened_at ? new Date(pos.opened_at).toLocaleString('en-US', {
+            timeZone: TZ, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+          }) : '--') +
+        '</td>' +
+        '<td>' +
+          '<button class="btn btn-sm btn-red" onclick="showCloseForm(\'' + escHtml(pos.symbol) + '\',' + idx + ')">Close</button> ' +
+          '<button class="btn btn-sm" onclick="showEditForm(\'' + escHtml(pos.symbol) + '\',' + idx + ')">Edit</button>' +
+        '</td>' +
+        '</tr>' +
+        '<tr id="close-form-' + idx + '" style="display:none;"><td colspan="11">' +
+          '<div class="inline-form active"><div class="form-row">' +
+            '<div class="form-group"><label>Exit Price</label>' +
+              '<input type="number" step="any" id="cf-exit-' + idx + '" value="' + (pos.current_price || '') + '">' +
+            '</div>' +
+            '<div class="form-group"><label>Reason</label>' +
+              '<input type="text" class="wide" id="cf-reason-' + idx + '" placeholder="manual close">' +
+            '</div>' +
+            '<div class="form-group" style="justify-content:flex-end;">' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button class="btn btn-sm btn-red" onclick="submitClose(\'' + escHtml(pos.symbol) + '\',' + idx + ')">Confirm Close</button>' +
+                '<button class="btn btn-sm" onclick="hideRow(\'close-form-' + idx + '\')">Cancel</button>' +
+              '</div>' +
+            '</div>' +
+          '</div></div>' +
+        '</td></tr>' +
+        '<tr id="edit-form-' + idx + '" style="display:none;"><td colspan="11">' +
+          '<div class="inline-form active"><div class="form-row">' +
+            '<div class="form-group"><label>Stop Loss</label>' +
+              '<input type="number" step="any" id="ef-stop-' + idx + '" value="' + (pos.stop_loss || '') + '">' +
+            '</div>' +
+            '<div class="form-group"><label>Target</label>' +
+              '<input type="number" step="any" id="ef-target-' + idx + '" value="' + (pos.target_price || '') + '">' +
+            '</div>' +
+            '<div class="form-group" style="justify-content:flex-end;">' +
+              '<div style="display:flex;gap:6px;">' +
+                '<button class="btn btn-sm btn-primary" onclick="submitEdit(\'' + escHtml(pos.symbol) + '\',' + idx + ')">Update</button>' +
+                '<button class="btn btn-sm" onclick="hideRow(\'edit-form-' + idx + '\')">Cancel</button>' +
+              '</div>' +
+            '</div>' +
+          '</div></div>' +
+        '</td></tr>';
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }
+
+  // --- Render Signals ---
+  function renderSignals() {
+    const container = document.getElementById('signals-container');
+
+    if (!signals || signals.length === 0) {
+      container.innerHTML = '<div class="empty-state">No signals available</div>';
+      return;
+    }
+
+    let html = '<div class="signals-grid">';
+    signals.forEach(function(sig, idx) {
+      const actionClass = (sig.action && sig.action.toUpperCase() === 'SELL') ? 'sell' : 'buy';
+      const conf = sig.confidence != null ? (sig.confidence * 100) : 0;
+
+      html += '<div class="signal-card">' +
+        '<div class="signal-header">' +
+          '<span class="signal-symbol">' + escHtml(sig.symbol) + '</span>' +
+          '<span class="signal-action ' + actionClass + '">' + escHtml((sig.action || '').toUpperCase()) + '</span>' +
+        '</div>' +
+        '<div class="signal-metrics">' +
+          '<div><div class="metric-label">Entry</div><div class="metric-value">' + fmtUsd(sig.entry_price) + '</div></div>' +
+          '<div><div class="metric-label">Target</div><div class="metric-value">' + fmtUsd(sig.target_price) + '</div></div>' +
+          '<div><div class="metric-label">Stop</div><div class="metric-value">' + fmtUsd(sig.stop_loss) + '</div></div>' +
+          '<div><div class="metric-label">R:R</div><div class="metric-value">' + fmt(sig.risk_reward_ratio, 1) + '</div></div>' +
+          '<div><div class="metric-label">Confidence</div><div class="metric-value">' + fmt(conf, 0) + '%</div></div>' +
+          '<div><div class="metric-label">Horizon</div><div class="metric-value">' + (sig.horizon_days || '--') + 'd</div></div>' +
+        '</div>' +
+        '<div class="confidence-bar"><div class="fill" style="width:' + conf + '%;"></div></div>' +
+        (sig.rationale ? '<div class="signal-rationale">' + escHtml(sig.rationale) + '</div>' : '') +
+        '<button class="btn btn-sm btn-green" onclick="tradeSignal(' + idx + ')">Trade</button>' +
+      '</div>';
+    });
+    html += '</div>';
+    container.innerHTML = html;
+  }
+
+  // --- Render History ---
+  function renderHistory() {
+    const container = document.getElementById('history-container');
+    const countEl = document.getElementById('history-count');
+    countEl.textContent = history.length + ' trade' + (history.length !== 1 ? 's' : '');
+
+    if (!history || history.length === 0) {
+      container.innerHTML = '<div class="empty-state">No trade history</div>';
+      return;
+    }
+
+    let totalPnl = 0;
+    let html = '<table><thead><tr>' +
+      '<th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th>' +
+      '<th>P&L ($)</th><th>P&L (%)</th><th>Reason</th><th>Closed At</th>' +
+      '</tr></thead><tbody>';
+
+    history.forEach(function(h) {
+      const pnl = h.pnl || 0;
+      totalPnl += pnl;
+      const sideClass = (h.side && h.side.toLowerCase() === 'short') ? 'side-short' : 'side-long';
+      const sideLabel = (h.side && h.side.toLowerCase() === 'short') ? 'SHORT' : 'LONG';
+      const closedAt = h.closed_at ? new Date(h.closed_at).toLocaleString('en-US', { timeZone: TZ,
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) : '--';
+
+      html += '<tr>' +
+        '<td><strong>' + escHtml(h.symbol) + '</strong></td>' +
+        '<td class="' + sideClass + '">' + sideLabel + '</td>' +
+        '<td class="mono">' + fmt(h.qty, isCrypto(h.symbol) ? 6 : 0) + '</td>' +
+        '<td class="mono">' + fmtUsd(h.entry_price) + '</td>' +
+        '<td class="mono">' + fmtUsd(h.exit_price) + '</td>' +
+        '<td class="mono ' + pnlClass(pnl) + '">' + fmtUsd(pnl) + '</td>' +
+        '<td class="mono ' + pnlClass(h.pnl_pct) + '">' + fmtPct(h.pnl_pct) + '</td>' +
+        '<td>' + escHtml(h.reason || '') + '</td>' +
+        '<td class="mono" style="font-size:12px;">' + closedAt + '</td>' +
+        '</tr>';
+    });
+
+    html += '<tr class="totals-row">' +
+      '<td colspan="5" style="text-align:right;">Total Realized P&L</td>' +
+      '<td class="mono ' + pnlClass(totalPnl) + '">' + fmtUsd(totalPnl) + '</td>' +
+      '<td colspan="3"></td></tr>';
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  }
+
+  // --- Actions ---
+  window.showCloseForm = function(symbol, idx) {
+    hideAllForms();
+    var row = document.getElementById('close-form-' + idx);
+    if (row) row.style.display = 'table-row';
+  };
+
+  window.showEditForm = function(symbol, idx) {
+    hideAllForms();
+    var row = document.getElementById('edit-form-' + idx);
+    if (row) row.style.display = 'table-row';
+  };
+
+  window.hideRow = function(id) {
+    var row = document.getElementById(id);
+    if (row) row.style.display = 'none';
+  };
+
+  function hideAllForms() {
+    var rows = document.querySelectorAll('[id^="close-form-"],[id^="edit-form-"]');
+    rows.forEach(function(r) { r.style.display = 'none'; });
+  }
+
+  window.submitClose = async function(symbol, idx) {
+    var exitPrice = parseFloat(document.getElementById('cf-exit-' + idx).value);
+    var reason = document.getElementById('cf-reason-' + idx).value || 'manual close';
+    if (isNaN(exitPrice) || exitPrice <= 0) {
+      showToast('Enter a valid exit price', 'error');
+      return;
+    }
+    try {
+      await apiPost('/api/close', { symbol: symbol, exit_price: exitPrice, reason: reason });
+      showToast('Closed ' + symbol);
+      await refreshAll();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  window.submitEdit = async function(symbol, idx) {
+    var stopLoss = parseFloat(document.getElementById('ef-stop-' + idx).value);
+    var target = parseFloat(document.getElementById('ef-target-' + idx).value);
+    var body = { symbol: symbol };
+    if (!isNaN(stopLoss) && stopLoss > 0) body.stop_loss = stopLoss;
+    if (!isNaN(target) && target > 0) body.target_price = target;
+    try {
+      await apiPost('/api/update-stops', body);
+      showToast('Updated stops for ' + symbol);
+      await refreshAll();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  window.toggleOpenForm = function() {
+    var panel = document.getElementById('open-form-panel');
+    panel.classList.toggle('active');
+  };
+
+  window.submitOpenPosition = async function() {
+    var symbol = document.getElementById('of-symbol').value.trim().toUpperCase();
+    var side = document.getElementById('of-side').value;
+    var qty = parseFloat(document.getElementById('of-qty').value);
+    var entry = parseFloat(document.getElementById('of-entry').value);
+    var stop = parseFloat(document.getElementById('of-stop').value);
+    var target = parseFloat(document.getElementById('of-target').value);
+
+    if (!symbol) { showToast('Enter a symbol', 'error'); return; }
+    if (isNaN(qty) || qty <= 0) { showToast('Enter a valid quantity', 'error'); return; }
+    if (isNaN(entry) || entry <= 0) { showToast('Enter a valid entry price', 'error'); return; }
+
+    var body = { symbol: symbol, side: side, qty: qty, entry_price: entry };
+    if (!isNaN(stop) && stop > 0) body.stop_loss = stop;
+    if (!isNaN(target) && target > 0) body.target_price = target;
+
+    try {
+      await apiPost('/api/open', body);
+      showToast('Opened position: ' + symbol);
+      document.getElementById('open-form-panel').classList.remove('active');
+      clearOpenForm();
+      await refreshAll();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  function clearOpenForm() {
+    ['of-symbol', 'of-qty', 'of-entry', 'of-stop', 'of-target'].forEach(function(id) {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('of-side').value = 'long';
+  }
+
+  window.tradeSignal = function(idx) {
+    var sig = signals[idx];
+    if (!sig) return;
+
+    var panel = document.getElementById('open-form-panel');
+    panel.classList.add('active');
+
+    document.getElementById('of-symbol').value = sig.symbol || '';
+    document.getElementById('of-side').value =
+      (sig.action && sig.action.toUpperCase() === 'SELL') ? 'short' : 'long';
+    document.getElementById('of-entry').value = sig.entry_price || '';
+    document.getElementById('of-stop').value = sig.stop_loss || '';
+    document.getElementById('of-target').value = sig.target_price || '';
+
+    // Compute qty: 20% of portfolio / entry_price
+    var cash = portfolio ? portfolio.total_value : 0;
+    var allocation = cash * 0.2;
+    var entryPrice = parseFloat(sig.entry_price);
+    if (entryPrice > 0) {
+      var rawQty = allocation / entryPrice;
+      var qty = isCrypto(sig.symbol) ? Math.floor(rawQty * 1000000) / 1000000 : Math.floor(rawQty);
+      document.getElementById('of-qty').value = qty;
+    }
+
+    // Scroll to form
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
+  window.toggleHistory = function() {
+    var container = document.getElementById('history-container');
+    var toggle = document.getElementById('history-toggle');
+    var visible = container.style.display !== 'none';
+    container.style.display = visible ? 'none' : 'block';
+    toggle.classList.toggle('open', !visible);
+  };
+
+  // Expose refreshAll globally
+  window.refreshAll = refreshAll;
+
+  // --- Init ---
+  refreshAll();
+  refreshTimer = setInterval(refreshAll, 30000);
+})();
+</script>
+</body>
+</html>

@@ -64,7 +64,7 @@ data:
     lookback_days: 730  # 2 years
   crypto:
     provider: ccxt
-    exchange: binance
+    exchange: gate
     interval: 1d
     lookback_days: 730
   futures:

@@ -14,6 +14,12 @@ app = typer.Typer(
     help="Multi-asset buy/sell signal generator",
     no_args_is_help=True,
 )
+paper_app = typer.Typer(
+    name="paper",
+    help="Paper trading with virtual portfolio",
+    no_args_is_help=True,
+)
+app.add_typer(paper_app, name="paper")
 console = Console()
 
 
@@ -383,6 +389,267 @@ def dashboard(
         ["streamlit", "run", str(dashboard_path), "--server.port", str(port)],
         check=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Paper Trading Commands
+# ---------------------------------------------------------------------------
+@paper_app.command()
+def init(
+    balance: float = typer.Option(5000.0, "--balance", "-b", help="Starting balance in USD"),
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p", help="Portfolio JSON path"),
+) -> None:
+    """Initialize a new paper trading portfolio."""
+    from signalforge.paper.portfolio import PortfolioManager
+
+    mgr = PortfolioManager(portfolio_path)
+    if mgr.exists():
+        console.print("[yellow]Portfolio already exists. Use --path for a new one, or delete the existing file.[/yellow]")
+        console.print(f"  Path: {mgr.path}")
+        raise typer.Exit(1)
+
+    portfolio = mgr.init(balance=balance)
+    console.print(
+        Panel(
+            f"[bold green]Paper portfolio created![/bold green]\n\n"
+            f"  Balance: [bold]${portfolio.cash:,.2f}[/bold]\n"
+            f"  Path:    {mgr.path}",
+            title="SignalForge Paper Trading",
+            border_style="green",
+        )
+    )
+
+
+@paper_app.command()
+def status(
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
+) -> None:
+    """Show current portfolio status, positions, and P&L."""
+    from rich.table import Table
+
+    from signalforge.paper.portfolio import PortfolioManager
+
+    mgr = PortfolioManager(portfolio_path)
+    if not mgr.exists():
+        console.print("[red]No portfolio found. Run 'signalforge paper init' first.[/red]")
+        raise typer.Exit(1)
+
+    # Update positions with live prices
+    from signalforge.paper.simulator import LIVE_PRICES_20260326
+
+    p = mgr.load()
+    held_symbols = {pos.symbol for pos in p.positions}
+    price_updates = {s: px for s, px in LIVE_PRICES_20260326.items() if s in held_symbols}
+    if price_updates:
+        mgr.update_prices(price_updates)
+        p = mgr.load()
+
+    # Summary
+    pnl_style = "green" if p.total_pnl >= 0 else "red"
+    console.print(
+        Panel(
+            f"  Initial Balance: ${p.initial_balance:,.2f}\n"
+            f"  Cash:            ${p.cash:,.2f}\n"
+            f"  Positions Value: ${p.positions_value:,.2f}\n"
+            f"  Total Value:     [bold]${p.total_value:,.2f}[/bold]\n"
+            f"  Unrealized P&L:  [{pnl_style}]${p.unrealized_pnl:,.2f}[/{pnl_style}]\n"
+            f"  Realized P&L:    [{pnl_style}]${p.realized_pnl:,.2f}[/{pnl_style}]\n"
+            f"  Total P&L:       [{pnl_style}]${p.total_pnl:,.2f} ({p.total_pnl_pct:+.2f}%)[/{pnl_style}]",
+            title="Portfolio Summary",
+            border_style="cyan",
+        )
+    )
+
+    # Open positions
+    if p.positions:
+        table = Table(title="Open Positions", show_lines=True)
+        table.add_column("Symbol", style="bold")
+        table.add_column("Side", justify="center")
+        table.add_column("Qty", justify="right")
+        table.add_column("Entry", justify="right")
+        table.add_column("Current", justify="right")
+        table.add_column("Target", justify="right", style="green")
+        table.add_column("Stop", justify="right", style="red")
+        table.add_column("P&L", justify="right")
+        table.add_column("P&L %", justify="right")
+
+        for pos in p.positions:
+            pnl_color = "green" if pos.unrealized_pnl >= 0 else "red"
+            table.add_row(
+                pos.symbol,
+                f"[bold {'green' if pos.side == 'long' else 'red'}]{pos.side.upper()}[/bold {'green' if pos.side == 'long' else 'red'}]",
+                f"{pos.qty:.4g}",
+                f"${pos.entry_price:,.2f}",
+                f"${pos.current_price:,.2f}",
+                f"${pos.target_price:,.2f}",
+                f"${pos.stop_loss:,.2f}",
+                f"[{pnl_color}]${pos.unrealized_pnl:,.2f}[/{pnl_color}]",
+                f"[{pnl_color}]{pos.pnl_pct:+.2f}%[/{pnl_color}]",
+            )
+        console.print(table)
+    else:
+        console.print("[dim]No open positions.[/dim]")
+
+
+@paper_app.command()
+def auto(
+    n: int = typer.Option(5, "--n", "-n", help="Max signals to trade"),
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
+) -> None:
+    """Auto-trade top signals using position sizing rules (max 20% per trade)."""
+    from signalforge.paper.executor import execute_signals
+    from signalforge.paper.portfolio import PortfolioManager
+    from signalforge.paper.simulator import generate_live_signals
+
+    mgr = PortfolioManager(portfolio_path)
+    if not mgr.exists():
+        console.print("[red]No portfolio found. Run 'signalforge paper init' first.[/red]")
+        raise typer.Exit(1)
+
+    # Generate signals from live prices
+    signals = generate_live_signals()
+    if not signals:
+        console.print("[yellow]No signals generated.[/yellow]")
+        raise typer.Exit(0)
+
+    # Show signals before trading
+    console.print(
+        Panel(
+            f"[bold]Generated {len(signals)} signals from live prices[/bold]",
+            title="SignalForge Auto-Trade",
+            border_style="green",
+        )
+    )
+
+    from signalforge.output.report import ReportGenerator
+
+    report = ReportGenerator()
+    console.print(report.generate_report(signals[:n], fmt="table"))
+
+    # Execute top N signals
+    opened = execute_signals(signals[:n], mgr)
+
+    if opened:
+        console.print(f"\n[bold green]Opened {len(opened)} positions:[/bold green]")
+        for pos in opened:
+            console.print(
+                f"  {pos.side.upper()} {pos.symbol}: "
+                f"{pos.qty:.4g} shares @ ${pos.entry_price:,.2f} "
+                f"(${pos.qty * pos.entry_price:,.2f})"
+            )
+    else:
+        console.print("\n[yellow]No new positions opened (signals filtered or insufficient cash).[/yellow]")
+
+    # Show portfolio after
+    p = mgr.load()
+    console.print(f"\n  Cash remaining: ${p.cash:,.2f} | Positions: {len(p.positions)} | Total: ${p.total_value:,.2f}")
+
+
+@paper_app.command()
+def close(
+    symbol: str = typer.Argument(..., help="Symbol to close"),
+    price: Optional[float] = typer.Option(None, "--price", help="Exit price (uses entry if omitted)"),
+    reason: str = typer.Option("manual", "--reason", "-r", help="Reason: manual, target_hit, stop_hit"),
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
+) -> None:
+    """Close an open position."""
+    from signalforge.paper.portfolio import PortfolioManager
+
+    mgr = PortfolioManager(portfolio_path)
+    if not mgr.exists():
+        console.print("[red]No portfolio found.[/red]")
+        raise typer.Exit(1)
+
+    p = mgr.load()
+    pos = next((pos for pos in p.positions if pos.symbol == symbol), None)
+    if pos is None:
+        console.print(f"[red]No open position for {symbol}[/red]")
+        raise typer.Exit(1)
+
+    exit_price = price if price is not None else pos.current_price
+    trade = mgr.close_position(symbol, exit_price=exit_price, reason=reason)
+
+    pnl_color = "green" if trade.pnl >= 0 else "red"
+    console.print(
+        f"[bold]Closed {symbol}:[/bold] {trade.side.upper()} "
+        f"{trade.qty:.4g} @ ${trade.exit_price:,.2f} "
+        f"[{pnl_color}]P&L: ${trade.pnl:,.2f} ({trade.pnl_pct:+.2f}%)[/{pnl_color}]"
+    )
+
+
+@paper_app.command()
+def history(
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
+) -> None:
+    """Show completed trade history."""
+    from rich.table import Table
+
+    from signalforge.paper.portfolio import PortfolioManager
+
+    mgr = PortfolioManager(portfolio_path)
+    if not mgr.exists():
+        console.print("[red]No portfolio found.[/red]")
+        raise typer.Exit(1)
+
+    p = mgr.load()
+    if not p.trades:
+        console.print("[dim]No completed trades yet.[/dim]")
+        return
+
+    table = Table(title="Trade History", show_lines=True)
+    table.add_column("Symbol", style="bold")
+    table.add_column("Side", justify="center")
+    table.add_column("Qty", justify="right")
+    table.add_column("Entry", justify="right")
+    table.add_column("Exit", justify="right")
+    table.add_column("P&L", justify="right")
+    table.add_column("P&L %", justify="right")
+    table.add_column("Reason")
+    table.add_column("Closed", style="dim")
+
+    total_pnl = 0.0
+    for t in p.trades:
+        pnl_color = "green" if t.pnl >= 0 else "red"
+        total_pnl += t.pnl
+        table.add_row(
+            t.symbol,
+            t.side.upper(),
+            f"{t.qty:.4g}",
+            f"${t.entry_price:,.2f}",
+            f"${t.exit_price:,.2f}",
+            f"[{pnl_color}]${t.pnl:,.2f}[/{pnl_color}]",
+            f"[{pnl_color}]{t.pnl_pct:+.2f}%[/{pnl_color}]",
+            t.reason,
+            t.closed_at.strftime("%Y-%m-%d %H:%M"),
+        )
+
+    console.print(table)
+    pnl_color = "green" if total_pnl >= 0 else "red"
+    console.print(f"\n[bold]Total realized P&L: [{pnl_color}]${total_pnl:,.2f}[/{pnl_color}][/bold]")
+
+
+@paper_app.command(name="dashboard")
+def paper_dashboard(
+    port: int = typer.Option(8787, "--port", help="Server port"),
+    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
+) -> None:
+    """Launch the paper trading web dashboard."""
+    from signalforge.paper.server import main as server_main
+
+    args = [f"--port={port}"]
+    if portfolio_path:
+        args.append(f"--path={portfolio_path}")
+
+    console.print(
+        Panel(
+            f"[bold]Paper Trading Dashboard[/bold]\n\n"
+            f"  URL:  http://localhost:{port}/\n"
+            f"  Press Ctrl+C to stop.",
+            title="SignalForge",
+            border_style="green",
+        )
+    )
+    server_main(args)
 
 
 if __name__ == "__main__":
