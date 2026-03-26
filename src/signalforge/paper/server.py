@@ -715,6 +715,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Bypass proxy for data downloads (yfinance, ccxt, Wikipedia)
+    import os
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ.pop(var, None)
+
     args = _parse_args(argv)
 
     am = AccountManager()
