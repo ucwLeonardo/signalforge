@@ -561,8 +561,8 @@
     </div>
   </div>
 
-  <!-- C) Account Value Chart -->
-  <div class="card">
+  <!-- C) Account Value Chart (hidden until positions exist) -->
+  <div class="card" id="chart-card" style="display:none;">
     <div class="card-header">Account Value</div>
     <div class="card-body">
       <div class="chart-container">
@@ -1138,6 +1138,11 @@
     const rpEl = document.getElementById('s-realized-pnl');
     rpEl.textContent = fmtUsd(p.realized_pnl);
     rpEl.className = 'value mono ' + pnlClass(p.realized_pnl);
+
+    // Show chart card only when there are positions or value history
+    var hasActivity = (p.positions && p.positions.length > 0) ||
+                      (p.value_history && p.value_history.length > 1);
+    document.getElementById('chart-card').style.display = hasActivity ? '' : 'none';
   }
 
   // --- Render Chart ---
