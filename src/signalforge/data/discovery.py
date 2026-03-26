@@ -57,7 +57,7 @@ _FUTURES: list[str] = [
 # ---------------------------------------------------------------------------
 
 def discover_stocks(
-    max_symbols: int = 50,
+    max_symbols: int = 500,
     min_market_cap: float = 1e9,
 ) -> list[str]:
     """Discover US stock tickers from the S&P 500 Wikipedia table.
@@ -121,7 +121,7 @@ def discover_stocks(
 def discover_crypto(
     exchange_id: str = "gate",
     quote: str = "USDT",
-    max_symbols: int = 50,
+    max_symbols: int = 200,
     min_volume_usd: float = 1e6,
 ) -> list[str]:
     """Discover actively-traded crypto pairs from a ccxt exchange.
