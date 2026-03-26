@@ -543,6 +543,7 @@
     <div class="sp-header">
       <span class="sp-title" id="sp-title">Auto Build: Scanning...</span>
       <span class="sp-pct" id="sp-pct">0%</span>
+      <button class="btn btn-sm btn-red" onclick="cancelScan()" style="margin-left:8px;padding:2px 10px;">Stop</button>
     </div>
     <div class="sp-bar"><div class="sp-bar-fill" id="sp-bar-fill" style="width:0%"></div></div>
     <div class="sp-detail">
@@ -887,6 +888,13 @@
     logEl.innerHTML = _scanLog.join('<br>');
     logEl.scrollTop = logEl.scrollHeight;
   }
+
+  window.cancelScan = async function() {
+    try {
+      await fetch('/api/scan/cancel', { method: 'POST' });
+      showToast('Cancelling scan...');
+    } catch (e) { showToast('Cancel failed', 'error'); }
+  };
 
   window.toggleScanLog = function() {
     var logEl = document.getElementById('sp-log');

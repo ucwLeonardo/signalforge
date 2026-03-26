@@ -32,6 +32,7 @@ _live_prices: dict[str, float] = {}
 
 # Cached signals — only regenerated on explicit trigger (auto-build or manual scan)
 _cached_signals: list = []
+_scan_cancel: bool = False  # set to True to cancel running scan
 _scan_progress: dict = {
     "running": False,
     "total": 0,
@@ -40,7 +41,7 @@ _scan_progress: dict = {
     "stage": "",
     "detail": "",
     "error": None,
-    "log": [],  # list of {symbol, stage, detail, timestamp}
+    "log": [],
 }
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent
@@ -224,6 +225,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "/api/accounts/delete": self._handle_account_delete,
             "/api/auto-build": self._handle_auto_build,
             "/api/scan": self._handle_scan_start,
+            "/api/scan/cancel": self._handle_scan_cancel,
         }
         handler = routes.get(route)
         if handler is not None:
@@ -538,6 +540,8 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             body = self._read_body()
             categories = body.get("categories", ["us_stocks", "crypto"])
 
+            global _scan_cancel
+            _scan_cancel = False
             _scan_progress = {
                 "running": True, "total": 0, "completed": 0,
                 "symbol": "", "stage": "starting", "detail": "Initializing pipeline...",
@@ -562,6 +566,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                     signals = generate_real_signals(
                         categories=categories,
                         progress_cb=_on_progress,
+                        cancel_flag=lambda: _scan_cancel,
                     )
                     _cached_signals = signals
                     _scan_progress = {
@@ -601,6 +606,15 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "count": len(_cached_signals) if not _scan_progress["running"] else None,
             "log": log,
         })
+
+    def _handle_scan_cancel(self, params: dict[str, str]) -> None:
+        """Cancel a running scan."""
+        global _scan_cancel
+        if _scan_progress.get("running"):
+            _scan_cancel = True
+            self._send_json({"status": "cancelling"})
+        else:
+            self._send_json({"status": "not_running"})
 
     def _handle_auto_build(self, params: dict[str, str]) -> None:
         """Auto-build portfolio: run pipeline → top N → Kelly allocation → open positions.

@@ -12,11 +12,26 @@ def _get_symbols_for_categories(
     categories: list[str],
     config: "Config | None" = None,
 ) -> list[str]:
-    """Get symbol list from config filtered by requested categories."""
+    """Get symbol list using dynamic discovery, falling back to config.
+
+    Tries :func:`signalforge.data.discovery.discover_all` first which
+    merges config-defined symbols with live-discovered ones.  If
+    discovery fails entirely (import error, network error, etc.), falls
+    back to the static config lists.
+    """
     if config is None:
         from signalforge.config import load_config
         config = load_config()
 
+    # Try dynamic discovery first
+    try:
+        from signalforge.data.discovery import discover_all
+
+        return discover_all(categories, config)
+    except Exception:
+        pass
+
+    # Fallback: config-only symbols
     symbols: list[str] = []
     if "us_stocks" in categories:
         symbols.extend(config.us_stocks)
@@ -33,6 +48,7 @@ def generate_real_signals(
     categories: list[str] | None = None,
     config: "Config | None" = None,
     progress_cb: "Callable[[dict], None] | None" = None,
+    cancel_flag: "Callable[[], bool] | None" = None,
 ) -> list[TradeTarget]:
     """Generate signals using the real pipeline (LSTM, GBM, Technical, TradingAgents).
 
@@ -63,6 +79,7 @@ def generate_real_signals(
         config=config,
         use_store=True,
         progress_cb=progress_cb,
+        cancel_flag=cancel_flag,
     )
 
     # Sort by confidence descending

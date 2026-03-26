@@ -42,19 +42,24 @@ def run_pipeline(
     engines: Sequence[str] | None = None,
     use_store: bool = False,
     progress_cb: "Callable[[dict], None] | None" = None,
+    cancel_flag: "Callable[[], bool] | None" = None,
 ) -> list[dict]:
-    """Run the full signal generation pipeline.
+    """Run the full signal generation pipeline in sequential phases.
+
+    Phase 1: Download all data (incremental)
+    Phase 2: Train/predict with all engines per symbol
+    Phase 3: TradingAgents LLM review for top N
 
     Parameters
     ----------
     use_store:
         If True, use incremental data fetching via DataStore (parquet cache).
-        First run downloads full history; subsequent runs fetch only new bars.
     progress_cb:
         Optional callback called with a progress dict at each stage.
-        Dict keys: total, completed, symbol, stage, detail.
+    cancel_flag:
+        Optional callable returning True if the scan should be cancelled.
 
-    Returns list of TradeTarget-like dicts for each symbol.
+    Returns list of TradeTarget objects.
     """
     from signalforge.data.models import SupportResistance
     from signalforge.data.providers import get_provider
@@ -72,6 +77,9 @@ def run_pipeline(
                 "stage": stage,
                 "detail": detail,
             })
+
+    def _cancelled() -> bool:
+        return cancel_flag is not None and cancel_flag()
 
     # Set up incremental fetcher if requested
     fetcher = None
@@ -92,22 +100,27 @@ def run_pipeline(
     }
     combiner = SignalCombiner(weights)
     calculator = TargetCalculator()
-    all_targets = []
+
+    # ====================================================================
+    # PHASE 1: Download all data first
+    # ====================================================================
+    _report(0, "", "data", f"Phase 1: Downloading data for {total} assets...")
+    symbol_data: dict[str, "pd.DataFrame"] = {}  # symbol -> DataFrame
 
     for idx, symbol in enumerate(symbols):
-        logger.info(f"Processing {symbol}")
-        sym_type = _classify_symbol(symbol)
-        _report(idx, symbol, "data", f"Downloading {sym_type} data...")
+        if _cancelled():
+            _report(idx, "", "cancelled", "Scan cancelled by user")
+            return []
 
-        # 1. Fetch data (incremental if store enabled, direct otherwise)
+        sym_type = _classify_symbol(symbol)
+        _report(idx, symbol, "data", f"Downloading {sym_type} data ({idx+1}/{total})...")
+
         try:
             lookback = _get_lookback_days(sym_type, config)
             exchange_id = config.data.crypto_exchange if sym_type == "crypto" else None
 
             if fetcher is not None:
-                df = fetcher.fetch(
-                    symbol, interval, lookback, exchange_id=exchange_id,
-                )
+                df = fetcher.fetch(symbol, interval, lookback, exchange_id=exchange_id)
             else:
                 provider_kwargs = {}
                 if exchange_id:
@@ -121,22 +134,38 @@ def run_pipeline(
                 logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
                 _report(idx, symbol, "data", f"Skipped: only {len(df)} bars")
                 continue
+
+            current_price = float(df["close"].iloc[-1])
+            symbol_data[symbol] = df
+            _report(idx, symbol, "data", f"Downloaded: {len(df)} bars, last=${current_price:,.2f}")
+
         except Exception as e:
             logger.error(f"Data fetch failed for {symbol}: {e}")
             _report(idx, symbol, "data", f"Failed: {e}")
-            continue
 
+    ready_count = len(symbol_data)
+    _report(total, "", "data", f"Phase 1 complete: {ready_count}/{total} assets ready")
+    logger.info(f"Data download complete: {ready_count}/{total} assets")
+
+    # ====================================================================
+    # PHASE 2: Train/predict engines for each symbol
+    # ====================================================================
+    all_targets = []
+
+    for idx, (symbol, df) in enumerate(symbol_data.items()):
+        if _cancelled():
+            _report(idx, "", "cancelled", "Scan cancelled by user")
+            return all_targets
+
+        logger.info(f"Processing {symbol}")
         current_price = float(df["close"].iloc[-1])
-        _report(idx, symbol, "data", f"Ready: {len(df)} bars, last=${current_price:,.2f}")
         engine_results: dict[str, dict] = {}
 
-        # 2. Run prediction engines
-
+        # --- Kronos ---
         if engines is None or "kronos" in engines or "all" in engines:
             if config.kronos.enabled:
                 try:
                     from signalforge.engines.kronos_engine import KronosEngine
-
                     kronos = KronosEngine(config.kronos)
                     predictions = kronos.predict(df, pred_len=pred_len)
                     if not predictions.empty:
@@ -150,12 +179,11 @@ def run_pipeline(
                 except Exception as e:
                     logger.error(f"Kronos failed for {symbol}: {e}")
 
-        # --- Qlib factor engine ---
+        # --- Qlib ---
         if engines is None or "qlib" in engines or "all" in engines:
             if config.qlib.enabled:
                 try:
                     from signalforge.engines.qlib_engine import QlibEngine
-
                     qlib_eng = QlibEngine(config.qlib)
                     qlib_pred = qlib_eng.predict(df, pred_len=pred_len)
                     if not qlib_pred.empty and "predicted_return" in qlib_pred.columns:
@@ -170,12 +198,11 @@ def run_pipeline(
                 except Exception as e:
                     logger.error(f"Qlib failed for {symbol}: {e}")
 
-        # --- Chronos forecasting engine ---
+        # --- Chronos ---
         if engines is None or "chronos" in engines or "all" in engines:
             if config.chronos.enabled:
                 try:
                     from signalforge.engines.chronos_engine import ChronosEngine
-
                     chronos_eng = ChronosEngine(config.chronos)
                     chronos_pred = chronos_eng.predict(df, pred_len=pred_len)
                     if not chronos_pred.empty and "predicted_close" in chronos_pred.columns:
@@ -188,16 +215,12 @@ def run_pipeline(
                 except Exception as e:
                     logger.error(f"Chronos failed for {symbol}: {e}")
 
-        # NOTE: TradingAgents (Gemini) runs ONCE for top N after all assets are scored.
-        # See post-loop section below.
-
-        # --- LSTM engine ---
+        # --- LSTM ---
         if engines is None or "lstm" in engines or "all" in engines:
             if config.lstm.enabled:
-                _report(idx, symbol, "lstm", "Training/inference LSTM seq2seq")
+                _report(idx, symbol, "lstm", f"Training/inference LSTM ({idx+1}/{ready_count})")
                 try:
                     from signalforge.engines.lstm_engine import LSTMEngine
-
                     lstm_eng = LSTMEngine(config.lstm)
                     lstm_pred = lstm_eng.predict(df, pred_len=pred_len, symbol=symbol if use_store else None)
                     if not lstm_pred.empty:
@@ -210,13 +233,12 @@ def run_pipeline(
                 except Exception as e:
                     logger.error(f"LSTM failed for {symbol}: {e}")
 
-        # --- GBM ensemble engine ---
+        # --- GBM ---
         if engines is None or "gbm" in engines or "all" in engines:
             if config.gbm.enabled:
-                _report(idx, symbol, "gbm", "Training/inference GBM (LightGBM)")
+                _report(idx, symbol, "gbm", f"Training/inference GBM ({idx+1}/{ready_count})")
                 try:
                     from signalforge.engines.gbm_engine import GBMEnsembleEngine
-
                     gbm_eng = GBMEnsembleEngine(config.gbm)
                     gbm_pred = gbm_eng.predict(df, pred_len=pred_len, symbol=symbol if use_store else None)
                     if not gbm_pred.empty and "predicted_return" in gbm_pred.columns:
@@ -231,18 +253,15 @@ def run_pipeline(
                 except Exception as e:
                     logger.error(f"GBM failed for {symbol}: {e}")
 
-        # --- Technical analysis ---
+        # --- Technical ---
         if engines is None or "technical" in engines or "all" in engines:
             _report(idx, symbol, "technical", "RSI, MACD, BBands, S/R levels")
             try:
                 from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance
-
                 signals_df = compute_signals(df)
                 supports, resistances = compute_support_resistance(df)
-
                 support = supports[0] if supports else current_price * 0.95
                 resistance = resistances[0] if resistances else current_price * 1.05
-
                 if not signals_df.empty:
                     last_signal = float(signals_df["signal_strength"].iloc[-1])
                     engine_results["technical"] = {
@@ -259,7 +278,7 @@ def run_pipeline(
             logger.warning(f"No engine produced results for {symbol}")
             continue
 
-        # 3. Combine signals - inject current_price into price-type engines
+        # Combine signals
         active_engines = sorted(engine_results.keys())
         _report(idx, symbol, "ensemble", f"Combining: {', '.join(active_engines)}")
         for eng_name, eng_result in engine_results.items():
@@ -267,7 +286,7 @@ def run_pipeline(
                 eng_result["current_price"] = current_price
         combined = combiner.combine(engine_results)
 
-        # 4. Calculate targets
+        # Calculate targets
         support = engine_results.get("technical", {}).get("support", current_price * 0.95)
         resistance = engine_results.get("technical", {}).get("resistance", current_price * 1.05)
         levels = SupportResistance(support=support, resistance=resistance)
