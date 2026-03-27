@@ -132,13 +132,15 @@ class FactorEvolver:
         return self._result
 
     def _run_fallback(self) -> EvolutionResult:
-        """Simple hill-climbing factor discovery without RD-Agent."""
-        import numpy as np
-        import pandas as pd
+        """Enhanced fallback factor discovery using operators DSL.
 
-        logger.info("Running fallback factor evolution (no RD-Agent)")
+        Generates candidate factors from WorldQuant-style operator
+        compositions on OHLCV data, including cross-period interactions
+        and multi-field combinations.
+        """
+        logger.info("Running enhanced fallback factor evolution (no RD-Agent)")
 
-        # Define candidate factor formulas from OHLCV with eval expressions
+        # Basic OHLCV factor templates (original)
         factor_templates = [
             ("momentum_{n}d", "df['close'].pct_change({n})"),
             ("volatility_{n}d", "df['close'].pct_change().rolling({n}).std()"),
@@ -152,27 +154,71 @@ class FactorEvolver:
             ),
         ]
 
+        # Advanced WorldQuant-style templates using operators
+        advanced_templates = [
+            # Momentum decay: linearly weighted return
+            (
+                "decay_momentum_{n}d",
+                "op.decay_linear(df['close'].pct_change(), {n})",
+            ),
+            # Volume-price correlation
+            (
+                "vol_price_corr_{n}d",
+                "op.ts_corr(df['close'].pct_change(), df['volume'].pct_change(), {n})",
+            ),
+            # Time-series rank of return (relative strength within own history)
+            (
+                "ts_rank_ret_{n}d",
+                "op.ts_rank(df['close'].pct_change(), {n})",
+            ),
+            # Z-score of close relative to recent history
+            (
+                "ts_zscore_close_{n}d",
+                "op.ts_zscore(df['close'], {n})",
+            ),
+            # Days since high (how long since the rolling max)
+            (
+                "days_since_high_{n}d",
+                "op.ts_argmax(df['close'], {n})",
+            ),
+            # Intraday return mean-reversion signal
+            (
+                "intraday_revert_{n}d",
+                "op.ts_mean((df['close'] - df['open']) / (df['high'] - df['low'] + 1e-10), {n})",
+            ),
+            # Volume-weighted return
+            (
+                "vw_return_{n}d",
+                "op.ts_mean(df['close'].pct_change() * df['volume'], {n}) / (op.ts_mean(df['volume'], {n}) + 1e-10)",
+            ),
+            # ATR normalized by close, smoothed
+            (
+                "norm_atr_{n}d",
+                "op.ts_mean(pd.concat([df['high']-df['low'],(df['high']-df['close'].shift(1)).abs(),(df['low']-df['close'].shift(1)).abs()],axis=1).max(axis=1)/df['close'], {n})",
+            ),
+        ]
+
         windows = [5, 10, 20, 40, 60]
         discovered = []
 
-        for name_tmpl, expr_tmpl in factor_templates:
+        for name_tmpl, expr_tmpl in factor_templates + advanced_templates:
             for window in windows:
                 name = name_tmpl.format(n=window)
                 expression = expr_tmpl.format(n=window)
-                try:
-                    discovered.append({
-                        "name": name,
-                        "expression": expression,
-                        "window": window,
-                        "status": "candidate",
-                        "ic": 0.0,
-                    })
-                except Exception:
-                    continue
+                discovered.append({
+                    "name": name,
+                    "expression": expression,
+                    "window": window,
+                    "status": "candidate",
+                    "ic": 0.0,
+                    "ir": 0.0,
+                    "turnover": 0.0,
+                    "fitness": 0.0,
+                })
 
         self._result.factors_discovered = discovered
         self._result.iterations_completed = 1
-        logger.info(f"Generated {len(discovered)} candidate factors")
+        logger.info(f"Generated {len(discovered)} candidate factors (basic + advanced)")
 
         _save_factors_to_registry(discovered)
         return self._result

@@ -144,6 +144,15 @@ technical:
     - name: ATR
       period: 14
 
+# Alpha factor module
+factors:
+  enabled: true
+  preprocess: [winsorize, zscore]
+  neutralize: [market]
+  min_ic: 0.03            # Minimum IC to accept a discovered factor
+  min_ir: 0.5             # Minimum IR to accept a discovered factor
+  max_turnover: 0.3       # Maximum turnover to accept a discovered factor
+
 # Signal ensemble weights (re-normalised on the fly for active engines)
 # Disabled engines (kronos/qlib/chronos) get 0 weight — combiner re-normalises
 ensemble:

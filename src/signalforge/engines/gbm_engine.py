@@ -173,8 +173,12 @@ def _compute_features(
     if extra_factors:
         for factor in extra_factors:
             try:
+                try:
+                    from signalforge.factors import operators as _op
+                except ImportError:
+                    _op = None
                 features[factor["name"]] = eval(  # noqa: S307
-                    factor["expression"], {"df": df, "np": np, "pd": pd}
+                    factor["expression"], {"df": df, "np": np, "pd": pd, "op": _op}
                 )
             except Exception as e:
                 logger.warning("Factor {} failed: {}", factor["name"], e)
@@ -271,6 +275,17 @@ class GBMEnsembleEngine(PredictionEngine):
     @property
     def config(self) -> GBMConfig:
         return self._config
+
+    @staticmethod
+    def _infer_asset_type(symbol: str | None) -> str:
+        """Infer asset type from symbol string for factor selection."""
+        if symbol is None:
+            return "stock"
+        if "/" in symbol:
+            return "crypto"
+        if symbol.endswith("=F"):
+            return "futures"
+        return "stock"
 
     # ------------------------------------------------------------------
     # Model persistence
@@ -398,7 +413,33 @@ class GBMEnsembleEngine(PredictionEngine):
             except Exception as exc:
                 logger.debug("Could not load factor registry: {}", exc)
 
+        # Use the new factors module for feature computation alongside
+        # the original hardcoded features for backward compatibility
         features = _compute_features(df, cfg.feature_windows, extra_factors=extra_factors)
+
+        # Augment with factors module (new alpha factors)
+        try:
+            from signalforge.factors.compute import compute_factors as _compute_alpha_factors
+
+            asset_type = self._infer_asset_type(symbol) if symbol else "stock"
+            alpha_factors = _compute_alpha_factors(
+                df,
+                asset_type=asset_type,
+                extra_factors=extra_factors,
+                min_rows=cfg.min_train_rows,
+            )
+            # Only add columns that don't already exist
+            for col in alpha_factors.columns:
+                if col not in features.columns:
+                    features[col] = alpha_factors[col]
+            if not alpha_factors.empty:
+                logger.info(
+                    "GBM: augmented with {} alpha factors ({} new)",
+                    len(alpha_factors.columns),
+                    len(set(alpha_factors.columns) - set(features.columns)),
+                )
+        except Exception as exc:
+            logger.debug("Could not compute alpha factors: {}", exc)
         close = df["close"].astype(np.float64)
 
         # Label: forward return over label_horizon days

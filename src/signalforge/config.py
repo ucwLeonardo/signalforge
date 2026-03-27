@@ -100,6 +100,35 @@ class GBMConfig:
 
 
 @dataclass(frozen=True)
+class FactorsConfig:
+    """Configuration for the alpha factor module."""
+
+    enabled: bool = True
+    preprocess: tuple[str, ...] = ("winsorize", "zscore")
+    neutralize: tuple[str, ...] = ("market",)
+    min_ic: float = 0.03
+    min_ir: float = 0.5
+    max_turnover: float = 0.3
+    # Per-asset-class overrides
+    stock_categories: tuple[str, ...] = (
+        "momentum", "volatility", "volume", "trend", "mean_reversion", "price_action",
+    )
+    stock_neutralize: tuple[str, ...] = ("market",)
+    crypto_categories: tuple[str, ...] = (
+        "momentum", "volatility", "volume", "trend", "crypto",
+    )
+    crypto_neutralize: tuple[str, ...] = ()
+    futures_categories: tuple[str, ...] = (
+        "momentum", "volatility", "trend",
+    )
+    futures_neutralize: tuple[str, ...] = ()
+    options_categories: tuple[str, ...] = (
+        "momentum", "volatility", "options",
+    )
+    options_neutralize: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class EnsembleConfig:
     kronos_weight: float = 0.00
     qlib_weight: float = 0.15
@@ -144,6 +173,7 @@ class Config:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     lstm: LSTMConfig = field(default_factory=LSTMConfig)
     gbm: GBMConfig = field(default_factory=GBMConfig)
+    factors: FactorsConfig = field(default_factory=FactorsConfig)
     ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
     output_format: str = "table"
     confidence_threshold: float = 0.3
@@ -255,6 +285,16 @@ def load_config(config_path: str | Path | None = None) -> Config:
         min_train_rows=gbm_raw.get("min_train_rows", 60),
     )
 
+    factors_raw = raw.get("factors", {})
+    factors_cfg = FactorsConfig(
+        enabled=factors_raw.get("enabled", True),
+        preprocess=tuple(factors_raw.get("preprocess", ["winsorize", "zscore"])),
+        neutralize=tuple(factors_raw.get("neutralize", ["market"])),
+        min_ic=factors_raw.get("min_ic", 0.03),
+        min_ir=factors_raw.get("min_ir", 0.5),
+        max_turnover=factors_raw.get("max_turnover", 0.3),
+    )
+
     stocks_data = data_raw.get("stocks", {})
     crypto_data = data_raw.get("crypto", {})
     futures_data = data_raw.get("futures", {})
@@ -304,6 +344,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         agents=agents_cfg,
         lstm=lstm_cfg,
         gbm=gbm_cfg,
+        factors=factors_cfg,
         ensemble=ensemble,
         output_format=output_raw.get("format", "table"),
         confidence_threshold=output_raw.get("confidence_threshold", 0.3),
