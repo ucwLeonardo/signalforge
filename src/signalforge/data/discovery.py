@@ -208,47 +208,48 @@ def discover_all(
 
         config = load_config()
 
-    # Start with config-defined symbols (always included)
-    config_symbols: list[str] = []
-    if "us_stocks" in categories:
-        config_symbols.extend(config.us_stocks)
-    if "crypto" in categories:
-        config_symbols.extend(config.crypto)
-    if "futures" in categories:
-        config_symbols.extend(config.futures)
-    if "options" in categories:
-        config_symbols.extend(config.options)
-
-    # Discover additional symbols per category
-    discovered: list[str] = []
+    # Build per-category lists: config symbols first, then discovered
+    # This ensures all stocks come before all crypto, etc.
+    category_order = ["us_stocks", "crypto", "futures", "options"]
+    config_map: dict[str, list[str]] = {
+        "us_stocks": list(config.us_stocks),
+        "crypto": list(config.crypto),
+        "futures": list(config.futures),
+        "options": list(config.options),
+    }
+    discovered_map: dict[str, list[str]] = {}
 
     if "us_stocks" in categories:
         try:
-            discovered.extend(discover_stocks())
+            discovered_map["us_stocks"] = discover_stocks()
         except Exception as exc:
             logger.warning("Stock discovery error: {}", exc)
 
     if "crypto" in categories:
         try:
-            discovered.extend(discover_crypto())
+            discovered_map["crypto"] = discover_crypto()
         except Exception as exc:
             logger.warning("Crypto discovery error: {}", exc)
 
     if "futures" in categories:
         try:
-            discovered.extend(discover_futures())
+            discovered_map["futures"] = discover_futures()
         except Exception as exc:
             logger.warning("Futures discovery error: {}", exc)
 
-    # Merge: config symbols first, then discovered (preserving order)
+    # Merge by category: all stocks → all crypto → all futures → all options
     seen: set[str] = set()
     merged: list[str] = []
-    for sym in config_symbols + discovered:
-        if sym not in seen:
-            seen.add(sym)
-            merged.append(sym)
+    config_count = 0
+    for cat in category_order:
+        if cat not in categories:
+            continue
+        for sym in config_map.get(cat, []) + discovered_map.get(cat, []):
+            if sym not in seen:
+                seen.add(sym)
+                merged.append(sym)
+        config_count += len(config_map.get(cat, []))
 
-    config_count = len(config_symbols)
     discovered_new = len(merged) - config_count
     logger.info(
         "Asset discovery: {} from config + {} newly discovered = {} total",

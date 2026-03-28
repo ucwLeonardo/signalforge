@@ -200,6 +200,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "/api/prices": self._handle_prices_proxy,
             "/api/accounts": self._handle_accounts_list,
             "/api/scan/status": self._handle_scan_status,
+            "/api/watchlist": self._handle_watchlist_get,
         }
         handler = routes.get(route)
         if handler is not None:
@@ -226,6 +227,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "/api/auto-build": self._handle_auto_build,
             "/api/scan": self._handle_scan_start,
             "/api/scan/cancel": self._handle_scan_cancel,
+            "/api/watchlist": self._handle_watchlist_save,
         }
         handler = routes.get(route)
         if handler is not None:
@@ -558,6 +560,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_body()
             categories = body.get("categories", ["us_stocks", "crypto"])
+            config_only = body.get("config_only", False)
 
             global _scan_cancel
             _scan_cancel = False
@@ -579,23 +582,37 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 })
 
             def _run_scan() -> None:
-                global _cached_signals, _scan_progress
+                global _cached_signals, _scan_progress, _scan_cancel
                 try:
                     sys.stderr.write(f"[Scan] Background scan started: {categories}\n")
                     signals = generate_real_signals(
                         categories=categories,
                         progress_cb=_on_progress,
                         cancel_flag=lambda: _scan_cancel,
+                        config_only=config_only,
                     )
-                    _cached_signals = signals
-                    _scan_progress = {
-                        "running": False, "total": _scan_progress.get("total", 0),
-                        "completed": _scan_progress.get("total", 0),
-                        "symbol": "", "stage": "complete",
-                        "detail": f"Done: {len(signals)} signals generated",
-                        "error": None,
-                    }
-                    sys.stderr.write(f"[Scan] Done: {len(signals)} signals\n")
+                    if _scan_cancel:
+                        _cached_signals = signals if signals else _cached_signals
+                        completed = _scan_progress.get("completed", 0)
+                        total = _scan_progress.get("total", 0)
+                        _scan_progress = {
+                            "running": False, "total": total,
+                            "completed": completed,
+                            "symbol": "", "stage": "cancelled",
+                            "detail": f"Stopped at {completed}/{total} assets",
+                            "error": None,
+                        }
+                        sys.stderr.write(f"[Scan] Cancelled: {len(signals)} signals\n")
+                    else:
+                        _cached_signals = signals
+                        _scan_progress = {
+                            "running": False, "total": _scan_progress.get("total", 0),
+                            "completed": _scan_progress.get("total", 0),
+                            "symbol": "", "stage": "complete",
+                            "detail": f"Done: {len(signals)} signals generated",
+                            "error": None,
+                        }
+                        sys.stderr.write(f"[Scan] Done: {len(signals)} signals\n")
                 except Exception as exc:
                     _scan_progress = {
                         "running": False, "total": 0, "completed": 0,
@@ -612,8 +629,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
 
     def _handle_scan_status(self, params: dict[str, str]) -> None:
         """Return detailed scan progress with log history."""
-        # Only send last 50 log entries to avoid huge responses
-        log = _scan_progress.get("log", [])[-50:]
+        log = _scan_progress.get("log", [])
         self._send_json({
             "running": _scan_progress["running"],
             "total": _scan_progress.get("total", 0),
@@ -634,6 +650,58 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "cancelling"})
         else:
             self._send_json({"status": "not_running"})
+
+    # ---- Watchlist (config symbols) API ----
+
+    @staticmethod
+    def _get_config_path() -> Path:
+        candidates = [
+            Path.cwd() / "config" / "default.yaml",
+            Path(__file__).parent.parent.parent.parent / "config" / "default.yaml",
+            Path.home() / ".signalforge" / "config.yaml",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return candidates[0]  # default location for new file
+
+    def _handle_watchlist_get(self, params: dict[str, str]) -> None:
+        """Return config symbols grouped by category."""
+        from signalforge.config import load_config
+        cfg = load_config()
+        self._send_json({
+            "us_stocks": list(cfg.us_stocks),
+            "crypto": list(cfg.crypto),
+            "futures": list(cfg.futures),
+            "options": list(cfg.options),
+        })
+
+    def _handle_watchlist_save(self, params: dict[str, str]) -> None:
+        """Save watchlist symbols back to config YAML.
+
+        Body: {us_stocks: [...], crypto: [...], futures: [...], options: [...]}
+        """
+        import yaml
+        body = self._read_body()
+        config_path = self._get_config_path()
+
+        # Load existing YAML to preserve non-asset settings
+        if config_path.exists():
+            with open(config_path) as f:
+                raw = yaml.safe_load(f) or {}
+        else:
+            raw = {}
+
+        # Update only the assets section
+        raw.setdefault("assets", {})
+        for cat in ("us_stocks", "crypto", "futures", "options"):
+            if cat in body:
+                raw["assets"][cat] = body[cat]
+
+        with open(config_path, "w") as f:
+            yaml.dump(raw, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        self._send_json({"status": "saved", "path": str(config_path)})
 
     def _handle_auto_build(self, params: dict[str, str]) -> None:
         """Auto-build portfolio: run pipeline → top N → Kelly allocation → open positions.

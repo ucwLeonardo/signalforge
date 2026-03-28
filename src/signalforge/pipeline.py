@@ -87,7 +87,7 @@ def run_pipeline(
         from signalforge.data.incremental import IncrementalFetcher
         from signalforge.data.store import DataStore
 
-        fetcher = IncrementalFetcher(DataStore(config.data_dir))
+        fetcher = IncrementalFetcher(DataStore(config.data_dir), cancel_flag=cancel_flag)
 
     weights = {
         "kronos": config.ensemble.kronos_weight,
@@ -104,7 +104,7 @@ def run_pipeline(
     # ====================================================================
     # PHASE 1: Download all data first
     # ====================================================================
-    _report(0, "", "data", f"Phase 1: Downloading data for {total} assets...")
+    _report(0, "", "discovery", f"Phase 1: Downloading data for {total} assets...")
     symbol_data: dict[str, "pd.DataFrame"] = {}  # symbol -> DataFrame
 
     for idx, symbol in enumerate(symbols):
@@ -113,34 +113,46 @@ def run_pipeline(
             return []
 
         sym_type = _classify_symbol(symbol)
-        _report(idx, symbol, "data", f"Downloading {sym_type} data ({idx+1}/{total})...")
+        sym_label = sym_type.capitalize()  # Stock, Crypto, Futures, Options
+        _report(idx, symbol, "data", f"{sym_label} · Fetching ({idx+1}/{total})...")
 
         try:
             lookback = _get_lookback_days(sym_type, config)
 
             if fetcher is not None:
                 df = fetcher.fetch(symbol, interval, lookback)
+                fetch_source = fetcher.last_fetch_source
             else:
                 provider = get_provider(symbol)
                 end = datetime.now()
                 start = end - timedelta(days=lookback)
                 df = provider.fetch(symbol, interval, start, end)
+                fetch_source = "full"
 
             if df.empty or len(df) < 30:
                 logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
-                _report(idx, symbol, "data", f"Skipped: only {len(df)} bars")
+                _report(idx, symbol, "data_skipped",
+                        f"{sym_label} · Insufficient data ({len(df)} bars)")
                 continue
 
             current_price = float(df["close"].iloc[-1])
             symbol_data[symbol] = df
-            _report(idx, symbol, "data", f"Downloaded: {len(df)} bars, last=${current_price:,.2f}")
+            if fetch_source in ("cache", "cache_fallback"):
+                _report(idx, symbol, "data_cached",
+                        f"{sym_label} · {len(df)} bars, ${current_price:,.2f}")
+            elif fetch_source == "incremental":
+                _report(idx, symbol, "data_done",
+                        f"{sym_label} · Fetched new bars ({len(df)} total, ${current_price:,.2f})")
+            elif fetch_source == "full":
+                _report(idx, symbol, "data_done",
+                        f"{sym_label} · Downloaded {len(df)} bars (${current_price:,.2f})")
 
         except Exception as e:
             logger.error(f"Data fetch failed for {symbol}: {e}")
-            _report(idx, symbol, "data", f"Failed: {e}")
+            _report(idx, symbol, "data_error", f"{sym_label} · {e}")
 
     ready_count = len(symbol_data)
-    _report(total, "", "data", f"Phase 1 complete: {ready_count}/{total} assets ready")
+    _report(total, "", "discovery", f"Phase 1 complete: {ready_count}/{total} assets ready")
     logger.info(f"Data download complete: {ready_count}/{total} assets")
 
     # ====================================================================
@@ -160,6 +172,9 @@ def run_pipeline(
         # --- Kronos ---
         if engines is None or "kronos" in engines or "all" in engines:
             if config.kronos.enabled:
+                if _cancelled():
+                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    return all_targets
                 try:
                     from signalforge.engines.kronos_engine import KronosEngine
                     kronos = KronosEngine(config.kronos)
@@ -178,6 +193,9 @@ def run_pipeline(
         # --- Qlib ---
         if engines is None or "qlib" in engines or "all" in engines:
             if config.qlib.enabled:
+                if _cancelled():
+                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    return all_targets
                 try:
                     from signalforge.engines.qlib_engine import QlibEngine
                     qlib_eng = QlibEngine(config.qlib)
@@ -197,6 +215,9 @@ def run_pipeline(
         # --- Chronos ---
         if engines is None or "chronos" in engines or "all" in engines:
             if config.chronos.enabled:
+                if _cancelled():
+                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    return all_targets
                 try:
                     from signalforge.engines.chronos_engine import ChronosEngine
                     chronos_eng = ChronosEngine(config.chronos)
@@ -214,6 +235,9 @@ def run_pipeline(
         # --- LSTM ---
         if engines is None or "lstm" in engines or "all" in engines:
             if config.lstm.enabled:
+                if _cancelled():
+                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    return all_targets
                 _report(idx, symbol, "lstm", f"Training/inference LSTM ({idx+1}/{ready_count})")
                 try:
                     from signalforge.engines.lstm_engine import LSTMEngine
@@ -232,6 +256,9 @@ def run_pipeline(
         # --- GBM ---
         if engines is None or "gbm" in engines or "all" in engines:
             if config.gbm.enabled:
+                if _cancelled():
+                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    return all_targets
                 _report(idx, symbol, "gbm", f"Training/inference GBM ({idx+1}/{ready_count})")
                 try:
                     from signalforge.engines.gbm_engine import GBMEnsembleEngine
@@ -251,6 +278,9 @@ def run_pipeline(
 
         # --- Technical ---
         if engines is None or "technical" in engines or "all" in engines:
+            if _cancelled():
+                _report(idx, "", "cancelled", "Scan cancelled by user")
+                return all_targets
             _report(idx, symbol, "technical", "RSI, MACD, BBands, S/R levels")
             try:
                 from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance
@@ -308,6 +338,9 @@ def run_pipeline(
         )
 
     # --- Post-loop: TradingAgents (Gemini) for top N candidates ---
+    if _cancelled():
+        _report(len(symbol_data), "", "cancelled", "Scan cancelled by user")
+        return all_targets
     if (engines is None or "agents" in engines or "all" in engines) and config.agents.enabled:
         if all_targets:
             # Sort by confidence, take top candidates for LLM review

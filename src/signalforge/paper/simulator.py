@@ -8,30 +8,11 @@ import sys
 from signalforge.data.models import TradeAction, TradeTarget
 
 
-def _get_symbols_for_categories(
+def _get_config_symbols(
     categories: list[str],
-    config: "Config | None" = None,
+    config: "Config",
 ) -> list[str]:
-    """Get symbol list using dynamic discovery, falling back to config.
-
-    Tries :func:`signalforge.data.discovery.discover_all` first which
-    merges config-defined symbols with live-discovered ones.  If
-    discovery fails entirely (import error, network error, etc.), falls
-    back to the static config lists.
-    """
-    if config is None:
-        from signalforge.config import load_config
-        config = load_config()
-
-    # Try dynamic discovery first
-    try:
-        from signalforge.data.discovery import discover_all
-
-        return discover_all(categories, config)
-    except Exception:
-        pass
-
-    # Fallback: config-only symbols
+    """Return only the config-defined symbols (no discovery)."""
     symbols: list[str] = []
     if "us_stocks" in categories:
         symbols.extend(config.us_stocks)
@@ -44,11 +25,39 @@ def _get_symbols_for_categories(
     return symbols
 
 
+def _get_symbols_for_categories(
+    categories: list[str],
+    config: "Config | None" = None,
+    config_only: bool = False,
+) -> list[str]:
+    """Get symbol list using dynamic discovery, falling back to config.
+
+    If *config_only* is True, skip discovery and return only config symbols.
+    """
+    if config is None:
+        from signalforge.config import load_config
+        config = load_config()
+
+    if config_only:
+        return _get_config_symbols(categories, config)
+
+    # Try dynamic discovery first
+    try:
+        from signalforge.data.discovery import discover_all
+
+        return discover_all(categories, config)
+    except Exception:
+        pass
+
+    return _get_config_symbols(categories, config)
+
+
 def generate_real_signals(
     categories: list[str] | None = None,
     config: "Config | None" = None,
     progress_cb: "Callable[[dict], None] | None" = None,
     cancel_flag: "Callable[[], bool] | None" = None,
+    config_only: bool = False,
 ) -> list[TradeTarget]:
     """Generate signals using the real pipeline (LSTM, GBM, Technical, TradingAgents).
 
@@ -70,7 +79,7 @@ def generate_real_signals(
         progress_cb({"total": 0, "completed": 0, "symbol": "",
                       "stage": "discovery", "detail": f"Discovering assets for {', '.join(categories)}..."})
 
-    symbols = _get_symbols_for_categories(categories, config)
+    symbols = _get_symbols_for_categories(categories, config, config_only=config_only)
     if not symbols:
         return []
 

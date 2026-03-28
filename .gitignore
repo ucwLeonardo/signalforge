@@ -37,3 +37,4 @@ dashboard-*.png
 .gitmodules
 .ripgreprc
 .mcp.json
+.idea/

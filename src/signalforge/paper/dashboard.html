@@ -829,9 +829,16 @@
     </div>
     <div class="controls-divider"></div>
     <div class="controls-group">
-      <button class="btn btn-sm btn-primary" onclick="startScan()" aria-label="Run scan pipeline">
+      <button class="btn btn-sm btn-primary" onclick="startScan()" aria-label="Scan all assets (config + discovered)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        Scan
+        Scan All
+      </button>
+      <button class="btn btn-sm" onclick="startScan(true)" aria-label="Scan watchlist only (config symbols)" style="border-color:var(--amber);color:var(--amber);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        Watchlist
+      </button>
+      <button class="btn btn-sm btn-ghost" onclick="showWatchlistModal()" aria-label="Edit watchlist" title="Edit watchlist">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       </button>
     </div>
     <div class="controls-divider"></div>
@@ -887,6 +894,39 @@
   </div>
 </div>
 
+<!-- Watchlist Edit Modal -->
+<div id="watchlist-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Edit watchlist" onclick="if(event.target===this)hideWatchlistModal()">
+  <div class="modal" style="max-width:560px;">
+    <h3 style="margin-bottom:16px;">Edit Watchlist</h3>
+    <p style="font-size:12px;color:var(--text-secondary);margin-bottom:16px;">Config symbols are scanned with the "Watchlist" button. One symbol per line.</p>
+    <div style="display:flex;gap:12px;">
+      <div style="flex:1;">
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);display:block;margin-bottom:6px;">US Stocks</label>
+        <textarea id="wl-us-stocks" rows="10" style="width:100%;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'Fira Code',monospace;font-size:12px;padding:8px;resize:vertical;" placeholder="AAPL&#10;MSFT&#10;..."></textarea>
+      </div>
+      <div style="flex:1;">
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);display:block;margin-bottom:6px;">Crypto</label>
+        <textarea id="wl-crypto" rows="10" style="width:100%;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'Fira Code',monospace;font-size:12px;padding:8px;resize:vertical;" placeholder="BTC/USDT&#10;ETH/USDT&#10;..."></textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:12px;">
+      <div style="flex:1;">
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);display:block;margin-bottom:6px;">Futures</label>
+        <textarea id="wl-futures" rows="4" style="width:100%;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'Fira Code',monospace;font-size:12px;padding:8px;resize:vertical;" placeholder="ES=F&#10;GC=F&#10;..."></textarea>
+      </div>
+      <div style="flex:1;">
+        <label style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-secondary);display:block;margin-bottom:6px;">Options</label>
+        <textarea id="wl-options" rows="4" style="width:100%;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-family:'Fira Code',monospace;font-size:12px;padding:8px;resize:vertical;" placeholder="AAPL 2026-06-19 200 C&#10;..."></textarea>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+      <span id="wl-count" style="font-size:12px;color:var(--text-tertiary);margin-right:auto;align-self:center;"></span>
+      <button class="btn btn-sm" onclick="hideWatchlistModal()">Cancel</button>
+      <button class="btn btn-sm btn-primary" onclick="saveWatchlist()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="container">
   <!-- A) Portfolio Overview (hidden until positions/trades exist) -->
   <div id="portfolio-overview" style="display:none;">
@@ -924,7 +964,7 @@
     <div class="sp-header">
       <span class="sp-title" id="sp-title">Scanning...</span>
       <span class="sp-pct" id="sp-pct">0%</span>
-      <button class="btn btn-sm btn-red" onclick="cancelScan()" style="margin-left:8px;">Stop</button>
+      <button class="btn btn-sm btn-red" id="sp-action-btn" onclick="cancelScan()" style="margin-left:8px;">Stop</button>
     </div>
     <div class="sp-bar"><div class="sp-bar-fill" id="sp-bar-fill" style="width:0%"></div></div>
     <div class="sp-detail">
@@ -1226,58 +1266,108 @@
     document.getElementById('sp-symbol').textContent = s.symbol || '--';
 
     var stageEl = document.getElementById('sp-stage');
+    // Map sub-stages to parent stage for badge color
+    var dataStages = {data:1, data_cached:1, data_done:1, data_skipped:1, data_error:1};
+    var displayStage = dataStages[s.stage] ? 'data' : s.stage;
     var stageNames = {
-      discovery: 'Discovering', data: 'Downloading', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
+      discovery: 'Discovering', data: 'Fetching', data_cached: 'Cached', data_done: 'Data',
+      data_skipped: 'Skipped', data_error: 'Error', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
       agents: 'TradingAgents', ensemble: 'Combining', done: 'Done', complete: 'Complete',
-      starting: 'Starting', cancelled: 'Cancelled', error: 'Error'
+      starting: 'Starting', cancelled: 'Stopped', error: 'Error'
     };
     stageEl.textContent = stageNames[s.stage] || s.stage || '--';
-    stageEl.className = 'sp-stage ' + (s.stage || '');
+    stageEl.className = 'sp-stage ' + (displayStage || '');
 
     var stagesPerAsset = 5;
     var totalSteps = s.total * stagesPerAsset;
-    var stageIdx = {data:0, lstm:1, gbm:2, technical:3, ensemble:4, done:5, complete:5}[s.stage] || 0;
+    var stageIdx = {data:0, data_cached:0, data_done:0, data_skipped:0, data_error:0, lstm:1, gbm:2, technical:3, ensemble:4, done:5, complete:5}[s.stage] || 0;
     var currentSteps = s.completed * stagesPerAsset + (s.stage === 'done' || s.stage === 'complete' ? 0 : stageIdx);
     pct = totalSteps > 0 ? Math.round(currentSteps / totalSteps * 100) : 0;
     document.getElementById('sp-pct').textContent = pct + '%';
     document.getElementById('sp-bar-fill').style.width = pct + '%';
 
-    var phaseNames = {discovery:'Discovering assets',data:'Downloading data',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Cancelled',error:'Error'};
-    var title = s.total > 0
-      ? 'Scan: ' + (s.stage === 'complete' ? 'Complete' : (phaseNames[s.stage] || s.stage) + ' (' + (s.completed + 1) + '/' + s.total + ')')
-      : 'Scan: Starting...';
+    var phaseNames = {discovery:'Discovering assets',data:'Fetching data',data_cached:'Data up-to-date',data_done:'Data ready',data_skipped:'Skipped',data_error:'Fetch error',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Stopped',error:'Error'};
+    var title;
+    if (s.stage === 'cancelled') {
+      title = 'Scan: Stopped (' + s.completed + '/' + s.total + ')';
+    } else if (s.stage === 'complete') {
+      title = 'Scan: Complete';
+    } else if (s.total > 0) {
+      title = 'Scan: ' + (phaseNames[s.stage] || s.stage) + ' (' + (s.completed + 1) + '/' + s.total + ')';
+    } else {
+      title = 'Scan: Starting...';
+    }
+    // If locally cancelling, keep the Stopping/Restart UI — don't let polling overwrite it
+    if (_scanCancelling && s.stage !== 'cancelled') {
+      // Still waiting for server to confirm cancel — only update detail text
+      document.getElementById('sp-detail').textContent = s.detail ? ' \u2014 ' + s.detail : '';
+      panel.classList.add('active');
+      return;
+    }
     document.getElementById('sp-title').textContent = title;
     document.getElementById('sp-detail').textContent = s.detail ? ' \u2014 ' + s.detail : '';
     panel.classList.add('active');
 
-    var entry = (s.symbol || '') + ' | ' + (stageNames[s.stage] || s.stage) + ' | ' + (s.detail || '');
-    // Log entries are synced from server-side log only (see _syncServerLog)
-    // to avoid duplicate/out-of-order entries from client-side polling
+    // Toggle action button: Stop (while running) vs Restart (when stopped/cancelled/complete)
+    var actionBtn = document.getElementById('sp-action-btn');
+    if (s.stage === 'cancelled' || s.stage === 'complete' || s.stage === 'error') {
+      actionBtn.textContent = 'Restart';
+      actionBtn.className = 'btn btn-sm btn-primary';
+      actionBtn.disabled = false;
+      actionBtn.style.opacity = '';
+      actionBtn.onclick = function() { startScan(); };
+    } else {
+      actionBtn.textContent = 'Stop';
+      actionBtn.className = 'btn btn-sm btn-red';
+      actionBtn.disabled = false;
+      actionBtn.style.opacity = '';
+      actionBtn.onclick = function() { cancelScan(); };
+    }
   }
 
-  function _hideProgressPanel() {
+  function _hideProgressPanel(delay) {
     setTimeout(function() {
       document.getElementById('scan-progress').classList.remove('active');
       _scanLog = [];
+      _scanLogEntries = [];
       _lastLogEntry = '';
-    }, 8000);
+    }, delay !== undefined ? delay : 5000);
   }
 
   var _syncedLogCount = 0;
+  // Each entry: { html: '...', symbol: '...', stage: '...', replaceable: bool }
+  var _scanLogEntries = [];
   function _syncServerLog(serverLog) {
     if (serverLog.length <= _syncedLogCount) return;
-    var stageNames = {data:'Downloading',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',error:'Error'};
-    var stageColors = {data:'var(--blue)',lstm:'var(--purple)',gbm:'var(--amber)',technical:'var(--green)',agents:'var(--red)',ensemble:'var(--text-secondary)',done:'var(--green)',complete:'var(--green)',error:'var(--red)'};
+    var stageNames = {discovery:'Discovery',data:'Fetching',data_cached:'Cached',data_done:'Data',data_skipped:'Skipped',data_error:'Error',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',cancelled:'Stopped',error:'Error'};
+    var stageColors = {discovery:'var(--text-secondary)',data:'var(--blue)',data_cached:'var(--text-tertiary)',data_done:'var(--blue)',data_skipped:'var(--amber)',data_error:'var(--red)',lstm:'var(--purple)',gbm:'var(--amber)',technical:'var(--green)',agents:'var(--red)',ensemble:'var(--text-secondary)',done:'var(--green)',complete:'var(--green)',cancelled:'var(--red)',error:'var(--red)'};
     var newEntries = serverLog.slice(_syncedLogCount);
     newEntries.forEach(function(e) {
-      var color = stageColors[e.stage] || 'var(--text-secondary)';
-      _scanLog.push(
+      var detail = e.detail || '';
+      var stage = e.stage || '';
+      // Only per-symbol data-fetching lines are replaceable (not phase summaries)
+      var isFetching = stage === 'data' && !!e.symbol;
+
+      // Any result line for the same symbol replaces its "Fetching..." line
+      if (!isFetching && e.symbol) {
+        for (var i = _scanLogEntries.length - 1; i >= 0; i--) {
+          if (_scanLogEntries[i].replaceable && _scanLogEntries[i].symbol === e.symbol) {
+            _scanLogEntries.splice(i, 1);
+            break;
+          }
+        }
+      }
+
+      var color = stageColors[stage] || 'var(--text-secondary)';
+      var label = stageNames[stage] || stage;
+      var html =
         '<span style="color:var(--text-tertiary)">' + escHtml(e.ts) + '</span> '
         + (e.symbol ? '<span style="color:var(--text-primary);font-weight:600">' + escHtml(e.symbol) + '</span> ' : '')
-        + '<span style="color:' + color + '">[' + (stageNames[e.stage] || e.stage) + ']</span> '
-        + escHtml(e.detail || '')
-      );
+        + '<span style="color:' + color + '">[' + label + ']</span> '
+        + escHtml(detail);
+      _scanLogEntries.push({ html: html, symbol: e.symbol || '', stage: stage, replaceable: isFetching });
     });
+    _scanLog = _scanLogEntries.map(function(e) { return e.html; });
     _syncedLogCount = serverLog.length;
     var logEl = document.getElementById('sp-log');
     // Preserve scroll position — do not auto-scroll to bottom
@@ -1291,10 +1381,23 @@
     }
   }
 
+  var _scanCancelling = false;
   window.cancelScan = async function() {
     try {
+      _scanCancelling = true;
+      // Immediately update UI — don't wait for pipeline to finish
+      document.getElementById('sp-title').textContent = 'Scan: Stopping...';
+      var stageEl = document.getElementById('sp-stage');
+      stageEl.textContent = 'Stopping';
+      stageEl.className = 'sp-stage cancelled';
+      var actionBtn = document.getElementById('sp-action-btn');
+      actionBtn.textContent = 'Restart';
+      actionBtn.className = 'btn btn-sm';
+      actionBtn.disabled = true;
+      actionBtn.style.opacity = '0.5';
+      actionBtn.onclick = null;
+      // Send cancel to server asynchronously
       await fetch('/api/scan/cancel', { method: 'POST' });
-      showToast('Cancelling scan...');
     } catch (e) { showToast('Cancel failed', 'error'); }
   };
 
@@ -1312,10 +1415,61 @@
     if (e.key === 'Escape') {
       var modal = document.getElementById('create-account-modal');
       if (modal.classList.contains('active')) hideCreateAccountModal();
+      var wlModal = document.getElementById('watchlist-modal');
+      if (wlModal.classList.contains('active')) hideWatchlistModal();
     }
   });
 
-  window.startScan = async function() {
+  // --- Watchlist modal ---
+  function _parseTextarea(id) {
+    return document.getElementById(id).value.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+  function _updateWatchlistCount() {
+    var total = _parseTextarea('wl-us-stocks').length + _parseTextarea('wl-crypto').length
+              + _parseTextarea('wl-futures').length + _parseTextarea('wl-options').length;
+    document.getElementById('wl-count').textContent = total + ' symbols';
+  }
+
+  window.showWatchlistModal = async function() {
+    try {
+      var data = await fetch('/api/watchlist').then(function(r) { return r.json(); });
+      document.getElementById('wl-us-stocks').value = (data.us_stocks || []).join('\n');
+      document.getElementById('wl-crypto').value = (data.crypto || []).join('\n');
+      document.getElementById('wl-futures').value = (data.futures || []).join('\n');
+      document.getElementById('wl-options').value = (data.options || []).join('\n');
+      _updateWatchlistCount();
+    } catch (e) { showToast('Failed to load watchlist', 'error'); return; }
+    document.getElementById('watchlist-modal').classList.add('active');
+    // Live count update
+    ['wl-us-stocks','wl-crypto','wl-futures','wl-options'].forEach(function(id) {
+      document.getElementById(id).oninput = _updateWatchlistCount;
+    });
+  };
+
+  window.hideWatchlistModal = function() {
+    document.getElementById('watchlist-modal').classList.remove('active');
+  };
+
+  window.saveWatchlist = async function() {
+    var body = {
+      us_stocks: _parseTextarea('wl-us-stocks'),
+      crypto: _parseTextarea('wl-crypto'),
+      futures: _parseTextarea('wl-futures'),
+      options: _parseTextarea('wl-options')
+    };
+    try {
+      var res = await fetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error('Save failed');
+      showToast('Watchlist saved');
+      hideWatchlistModal();
+    } catch (e) { showToast('Failed to save watchlist', 'error'); }
+  };
+
+  window.startScan = async function(configOnly) {
     // Get categories from current account's asset_categories
     var catList = ['us_stocks', 'crypto']; // default
     try {
@@ -1327,13 +1481,19 @@
     } catch (e) { /* use defaults */ }
     if (catList.length === 0) { showToast('Account has no asset categories configured', 'error'); return; }
 
-    _scanLog = []; _lastLogEntry = ''; _syncedLogCount = 0;
+    _scanCancelling = false;
+    _scanLog = []; _scanLogEntries = []; _lastLogEntry = ''; _syncedLogCount = 0;
+    // Reset Details log DOM and collapse it
+    var logEl = document.getElementById('sp-log');
+    logEl.innerHTML = '';
+    logEl.style.display = 'none';
+    document.getElementById('sp-log-toggle').classList.remove('open');
     _updateProgressPanel({ total: 0, completed: 0, symbol: '', stage: 'starting', detail: 'Sending request...' });
     try {
       var res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ categories: catList })
+        body: JSON.stringify({ categories: catList, config_only: !!configOnly })
       });
       if (!res.ok) {
         var err = await res.json().catch(function() { return {}; });
@@ -1348,8 +1508,13 @@
           }
           if (!s.running) {
             clearInterval(pollInterval);
+            _scanCancelling = false;
             if (s.error) {
               showToast('Scan failed: ' + s.error, 'error');
+              _hideProgressPanel();
+            } else if (s.stage === 'cancelled') {
+              showToast('Scan pipeline stopped.');
+              await refreshAll();
             } else {
               showToast('Scan complete: ' + (s.count || 0) + ' signals');
               await refreshAll();
@@ -1930,7 +2095,7 @@
     try {
       var s = await fetch('/api/scan/status').then(function(r) { return r.json(); });
       if (s.running) {
-        _scanLog = []; _lastLogEntry = ''; _syncedLogCount = 0;
+        _scanLog = []; _scanLogEntries = []; _lastLogEntry = ''; _syncedLogCount = 0;
         _updateProgressPanel(s);
         if (s.log) _syncServerLog(s.log);
         var pollInterval = setInterval(async function() {
@@ -1940,8 +2105,13 @@
             if (st.log) _syncServerLog(st.log);
             if (!st.running) {
               clearInterval(pollInterval);
+              _scanCancelling = false;
               if (st.error) {
                 showToast('Scan failed: ' + st.error, 'error');
+                _hideProgressPanel();
+              } else if (st.stage === 'cancelled') {
+                showToast('Scan pipeline stopped.');
+                await refreshAll();
               } else {
                 showToast('Scan complete: ' + (st.count || 0) + ' signals');
                 await refreshAll();
