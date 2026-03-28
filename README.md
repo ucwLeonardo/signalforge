@@ -75,7 +75,10 @@ signalforge paper dashboard    # Launch paper trading dashboard
 Web-based dashboard at `http://localhost:8787`:
 
 - **Multi-account**: Create accounts with specific asset categories (stocks, crypto, futures)
-- **Scan**: One-click scan using account's asset categories
+- **Scan All**: Full scan — config symbols + dynamically discovered assets (~344 symbols)
+- **Watchlist Scan**: Quick scan — only config-defined symbols (~38 symbols), much faster
+- **Watchlist Editor**: Edit config symbols per category (US Stocks, Crypto, Futures, Options) directly from the dashboard
+- **Stop/Restart**: Responsive scan cancellation (stops within 0.5s), progress panel stays visible with Restart button
 - **Signals**: Filtered by account type — crypto account only sees crypto signals
 - **Trade**: Manual position entry with entry/stop/target from signals
 - **Auto-Build**: Kelly-criterion portfolio construction from top signals
@@ -127,7 +130,9 @@ signalforge evolve --mode factor -n 20        # Auto-discover alpha factors
 
 Dynamic discovery expands this to ~128 stocks (S&P 500 fallback) + ~200 crypto pairs via Massive API.
 
-Edit `config/default.yaml` to customize.
+Dynamic discovery expands stocks to ~300+ (S&P 500 subset). Assets are grouped by category (all stocks first, then crypto, then futures) — no interleaving.
+
+Edit `config/default.yaml` to customize, or use the Watchlist Editor in the dashboard.
 
 ## Installation
 
@@ -231,7 +236,7 @@ Massive API free tier: **5 requests/minute**. The provider includes:
 - HTTP 429 retry with backoff
 - Consecutive failure detection (skips network after 10 real failures)
 
-First full scan of all assets takes ~40 minutes; subsequent incremental updates are fast.
+First full scan of all assets takes ~40 minutes; subsequent scans use cached data (daily bars cached up to 4 days). Watchlist-only scans with cached data complete in seconds.
 
 ## Testing
 

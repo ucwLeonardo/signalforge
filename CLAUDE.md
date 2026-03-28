@@ -13,7 +13,8 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
   - Stocks: direct ticker pass-through
   - Crypto: `BTC/USDT` → `X:BTCUSD` conversion
   - Futures: `ES=F` → `SPY` ETF proxy mapping
-- **IncrementalFetcher**: Cache-first with rate-limit-aware incremental updates
+- **IncrementalFetcher**: Cache-first with rate-limit-aware incremental updates, cancel-aware 0.5s polling
+  - Daily bar cache freshness: ≤4 days (handles weekends), compares bar count to detect actual new data
 - **DataStore**: Parquet storage with dedup, `~/.signalforge/data/{stock,crypto,futures}/`
 - Rate limiting: 5 req/min sliding window, HTTP 429 retry, consecutive failure detection
 
@@ -37,6 +38,12 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 - **RD-Agent**: Automated factor discovery + model evolution via LLM-powered R&D loop
 - `evolution/factor_registry.py`: Stores discovered factors for GBM integration
 
+### Asset Discovery & Ordering
+- `discovery.py`: Merges config symbols + dynamically discovered symbols
+- Assets grouped by category: all stocks → all crypto → all futures → all options
+- Config symbols always first within each category, discovered appended after
+- `config_only` mode: skip discovery, use only config-defined symbols (for watchlist scan)
+
 ### Ensemble & Targets
 - `ensemble/combiner.py`: Weighted signal fusion with dynamic re-normalization
 - `ensemble/targets.py`: BUY/SELL/HOLD with entry, target, stop-loss, R:R ratio
@@ -46,7 +53,11 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 - Multi-account with per-account asset categories (stored in portfolio JSON)
 - Auto-build: Half-Kelly criterion portfolio allocation
 - Signal filtering by account categories
-- Live scan with progress tracking
+- **Scan UX**: Stop/Restart with immediate UI feedback, progress panel persists after stop
+- **Watchlist**: Edit config symbols via modal (`GET/POST /api/watchlist`), scan config-only with `config_only` param
+- **Scan All** vs **Watchlist Scan**: full discovery scan or config-symbols-only quick scan
+- Progress log: per-symbol stages (Discovery/Cached/Data/Skipped/Error) with category labels (Stock/Crypto/Futures)
+- Cancel-aware data fetching: 0.5s polling in IncrementalFetcher for responsive stop
 
 ## Environment Variables
 - `MASSIVE_API_KEY` (required): Polygon/Massive API key for all market data
