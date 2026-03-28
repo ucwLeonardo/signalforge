@@ -13,6 +13,11 @@ build/
 .claude/
 .playwright-mcp/
 .serena/
+.idea/
+.vscode/
+
+# Screenshots
+dashboard-*.png
 
 # Tool-generated context files
 **/CLAUDE.md

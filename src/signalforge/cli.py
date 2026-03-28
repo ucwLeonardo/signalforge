@@ -67,6 +67,7 @@ def scan(
         interval=interval,
         pred_len=pred_len,
         engines=[engine] if engine != "all" else None,
+        use_store=True,
     )
 
     # Output results
@@ -129,10 +130,6 @@ def train(
     Models are saved to ~/.signalforge/models/{lstm,gbm}/ and reused
     by 'signalforge scan' and the paper trading dashboard's Auto Build.
     """
-    import os
-    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(var, None)
-
     from signalforge.config import load_config
     from signalforge.data.incremental import IncrementalFetcher
     from signalforge.data.store import DataStore
@@ -443,6 +440,7 @@ def top(
         config=cfg,
         interval=interval,
         pred_len=pred_len,
+        use_store=True,
     )
 
     # Filter by action

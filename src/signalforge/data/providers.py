@@ -1,19 +1,51 @@
-"""Data providers for stocks, crypto, and futures."""
+"""Data providers for stocks, crypto, and futures via Massive (Polygon) API."""
 
 from __future__ import annotations
 
 import abc
+import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
+import requests
 from loguru import logger
 
-from signalforge.data.models import Asset, AssetType, Bar, OptionContract, asset_from_symbol, parse_option_symbol
+from signalforge.data.models import Asset, AssetType, Bar, asset_from_symbol
 
 # ---------------------------------------------------------------------------
 # Column contract shared by every provider
 # ---------------------------------------------------------------------------
 OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
+
+# ---------------------------------------------------------------------------
+# Futures → ETF mapping (Massive doesn't have raw futures contracts)
+# ---------------------------------------------------------------------------
+_FUTURES_TO_ETF: dict[str, str] = {
+    "ES=F": "SPY",   # S&P 500
+    "NQ=F": "QQQ",   # Nasdaq 100
+    "YM=F": "DIA",   # Dow Jones
+    "GC=F": "GLD",   # Gold
+    "SI=F": "SLV",   # Silver
+    "CL=F": "USO",   # Crude Oil
+    "NG=F": "UNG",   # Natural Gas
+    "ZB=F": "TLT",   # 30-Year Treasury
+    "ZN=F": "IEF",   # 10-Year Treasury
+    "ZC=F": "CORN",  # Corn
+}
+
+# Interval mapping: SignalForge → Polygon multiplier/timespan
+_INTERVAL_MAP: dict[str, tuple[int, str]] = {
+    "1m": (1, "minute"),
+    "5m": (5, "minute"),
+    "15m": (15, "minute"),
+    "30m": (30, "minute"),
+    "1h": (1, "hour"),
+    "4h": (4, "hour"),
+    "1d": (1, "day"),
+    "1w": (1, "week"),
+    "1M": (1, "month"),
+}
 
 
 def _df_to_bars(df: pd.DataFrame) -> list[Bar]:
@@ -74,142 +106,112 @@ class BaseProvider(abc.ABC):
 
 
 # ---------------------------------------------------------------------------
-# Stock provider (yfinance)
+# Massive (Polygon) unified provider
 # ---------------------------------------------------------------------------
-class StockProvider(BaseProvider):
-    """Fetches stock OHLCV data via *yfinance*."""
+_MASSIVE_BASE_URL = "https://api.polygon.io"
+_RATE_LIMIT_CALLS = 5
+_RATE_LIMIT_WINDOW = 60  # seconds
 
-    def fetch(
-        self,
-        symbol_or_asset: str | Asset,
-        interval: str = "1d",
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-    ) -> pd.DataFrame:
-        import yfinance as yf
-
-        asset = _resolve_asset(symbol_or_asset)
-        now = datetime.now(tz=timezone.utc)
-        start = start_date or (now - timedelta(days=730))
-        end = end_date or now
-
-        logger.info(
-            "StockProvider fetching {} interval={} {} -> {}",
-            asset.symbol, interval, start.date(), end.date(),
-        )
-
-        ticker = yf.Ticker(asset.symbol)
-        hist: pd.DataFrame = ticker.history(
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            interval=interval,
-            auto_adjust=True,
-        )
-
-        if hist.empty:
-            logger.warning("No data returned for {}", asset.symbol)
-            return pd.DataFrame(columns=OHLCV_COLUMNS)
-
-        hist = hist.reset_index()
-        date_col = "Date" if "Date" in hist.columns else "Datetime"
-        result = pd.DataFrame(
-            {
-                "timestamp": pd.to_datetime(hist[date_col], utc=True),
-                "open": hist["Open"].astype(float),
-                "high": hist["High"].astype(float),
-                "low": hist["Low"].astype(float),
-                "close": hist["Close"].astype(float),
-                "volume": hist["Volume"].astype(float),
-            }
-        )
-        result = result.sort_values("timestamp").reset_index(drop=True)
-        logger.info("StockProvider returned {} bars for {}", len(result), asset.symbol)
-        return result
+# Module-level shared rate limiter — all MassiveProvider instances share this
+# so that multiple instances created during a scan don't exceed the API limit.
+_shared_call_timestamps: list[float] = []
 
 
-# ---------------------------------------------------------------------------
-# Crypto provider (ccxt / Binance)
-# ---------------------------------------------------------------------------
-class CryptoProvider(BaseProvider):
-    """Fetches crypto OHLCV data via *ccxt* (Binance by default)."""
+class RateLimitError(Exception):
+    """Raised when the API returns HTTP 429 and retry also fails."""
 
-    def __init__(self, exchange_id: str = "binance") -> None:
-        self._exchange_id = exchange_id
 
-    def _create_exchange(self) -> object:
-        import ccxt
+class MassiveProvider(BaseProvider):
+    """Unified provider for stocks, crypto, and futures via Massive (Polygon) API.
 
-        exchange_cls = getattr(ccxt, self._exchange_id, None)
-        if exchange_cls is None:
-            raise ValueError(f"Unknown ccxt exchange: {self._exchange_id}")
-        return exchange_cls({"enableRateLimit": True, "timeout": 15000})
+    Handles ticker format conversion internally:
+    - Stocks: ``AAPL`` → ``AAPL``
+    - Crypto: ``BTC/USDT`` → ``X:BTCUSD``
+    - Futures: ``ES=F`` → ``SPY`` (ETF proxy)
+    """
 
-    def fetch(
-        self,
-        symbol_or_asset: str | Asset,
-        interval: str = "1d",
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-    ) -> pd.DataFrame:
-        asset = _resolve_asset(symbol_or_asset)
-        exchange = self._create_exchange()
-
-        now = datetime.now(tz=timezone.utc)
-        start = start_date or (now - timedelta(days=730))
-        end = end_date or now
-        since_ms = int(start.timestamp() * 1000)
-        end_ms = int(end.timestamp() * 1000)
-
-        logger.info(
-            "CryptoProvider fetching {} on {} interval={} {} -> {}",
-            asset.symbol, self._exchange_id, interval, start.date(), end.date(),
-        )
-
-        all_ohlcv: list[list[float]] = []
-        while since_ms < end_ms:
-            batch: list[list[float]] = exchange.fetch_ohlcv(  # type: ignore[attr-defined]
-                asset.symbol,
-                timeframe=interval,
-                since=since_ms,
-                limit=1000,
+    def __init__(self, api_key: str | None = None) -> None:
+        self._api_key = api_key or os.environ.get("MASSIVE_API_KEY", "")
+        if not self._api_key:
+            raise ValueError(
+                "Massive API key required. Set MASSIVE_API_KEY env var "
+                "or pass api_key parameter."
             )
-            if not batch:
-                break
-            all_ohlcv.extend(batch)
-            last_ts = int(batch[-1][0])
-            if last_ts <= since_ms:
-                break
-            since_ms = last_ts + 1
+        self._session = requests.Session()
+        self._session.params = {"apiKey": self._api_key}  # type: ignore[assignment]
 
-        if not all_ohlcv:
-            logger.warning("No data returned for {}", asset.symbol)
-            return pd.DataFrame(columns=OHLCV_COLUMNS)
+    @staticmethod
+    def _wait_for_rate_limit() -> None:
+        """Sliding-window rate limiter: at most _RATE_LIMIT_CALLS per _RATE_LIMIT_WINDOW.
 
-        df = pd.DataFrame(all_ohlcv, columns=["ts_ms", "open", "high", "low", "close", "volume"])
-        df = df[df["ts_ms"] <= end_ms].copy()
-        result = pd.DataFrame(
-            {
-                "timestamp": pd.to_datetime(df["ts_ms"], unit="ms", utc=True),
-                "open": df["open"].astype(float),
-                "high": df["high"].astype(float),
-                "low": df["low"].astype(float),
-                "close": df["close"].astype(float),
-                "volume": df["volume"].astype(float),
-            }
-        )
-        result = result.sort_values("timestamp").reset_index(drop=True)
-        logger.info("CryptoProvider returned {} bars for {}", len(result), asset.symbol)
-        return result
+        Uses a module-level timestamp list so all provider instances share
+        the same budget.
+        """
+        global _shared_call_timestamps
+        now = time.monotonic()
+        _shared_call_timestamps = [
+            ts for ts in _shared_call_timestamps
+            if now - ts < _RATE_LIMIT_WINDOW
+        ]
+        if len(_shared_call_timestamps) >= _RATE_LIMIT_CALLS:
+            oldest = _shared_call_timestamps[0]
+            sleep_time = oldest + _RATE_LIMIT_WINDOW - now + 1.0
+            if sleep_time > 0:
+                logger.info("Rate limited, waiting {:.0f}s...", sleep_time)
+                time.sleep(sleep_time)
+            now = time.monotonic()
+            _shared_call_timestamps = [
+                ts for ts in _shared_call_timestamps
+                if now - ts < _RATE_LIMIT_WINDOW
+            ]
+        _shared_call_timestamps.append(time.monotonic())
 
+    def _handle_429(
+        self,
+        resp: requests.Response,
+        url: str,
+        params: dict | None = None,
+    ) -> requests.Response:
+        """Handle HTTP 429: wait and retry once, otherwise raise."""
+        if resp.status_code == 429:
+            logger.warning("HTTP 429 received, waiting {}s before retry...", _RATE_LIMIT_WINDOW)
+            time.sleep(_RATE_LIMIT_WINDOW)
+            self._wait_for_rate_limit()
+            retry_resp = self._session.get(url, params=params, timeout=30)
+            if retry_resp.status_code == 429:
+                raise RateLimitError(
+                    f"Rate limited twice for {url}; giving up."
+                )
+            retry_resp.raise_for_status()
+            return retry_resp
+        resp.raise_for_status()
+        return resp
 
-# ---------------------------------------------------------------------------
-# Futures provider (yfinance)
-# ---------------------------------------------------------------------------
-class FuturesProvider(BaseProvider):
-    """Fetches futures OHLCV data via *yfinance*.
+    @staticmethod
+    def to_polygon_ticker(symbol: str) -> str:
+        """Convert a SignalForge symbol to a Polygon ticker.
 
-    Futures tickers on Yahoo Finance use the ``=F`` suffix (e.g. ``ES=F``).
-    """
+        ``BTC/USDT`` → ``X:BTCUSD``
+        ``ES=F`` → ``SPY``
+        ``AAPL`` → ``AAPL``
+        """
+        # Futures → ETF
+        if symbol.endswith("=F"):
+            etf = _FUTURES_TO_ETF.get(symbol)
+            if etf is None:
+                raise ValueError(
+                    f"No ETF mapping for futures symbol {symbol}. "
+                    f"Known: {', '.join(_FUTURES_TO_ETF)}"
+                )
+            return etf
+
+        # Crypto: BTC/USDT → X:BTCUSD
+        if "/" in symbol:
+            base = symbol.split("/")[0]
+            return f"X:{base}USD"
+
+        # Stocks: pass-through
+        return symbol
 
     def fetch(
         self,
@@ -218,192 +220,75 @@ class FuturesProvider(BaseProvider):
         start_date: datetime | None = None,
         end_date: datetime | None = None,
     ) -> pd.DataFrame:
-        import yfinance as yf
-
         asset = _resolve_asset(symbol_or_asset)
         now = datetime.now(tz=timezone.utc)
-        start = start_date or (now - timedelta(days=365))
+        start = start_date or (now - timedelta(days=730))
         end = end_date or now
 
+        polygon_ticker = self.to_polygon_ticker(asset.symbol)
+        multiplier, timespan = _INTERVAL_MAP.get(interval, (1, "day"))
+
+        start_str = start.strftime("%Y-%m-%d")
+        end_str = end.strftime("%Y-%m-%d")
+
         logger.info(
-            "FuturesProvider fetching {} interval={} {} -> {}",
-            asset.symbol, interval, start.date(), end.date(),
+            "MassiveProvider fetching {} → {} interval={} {} -> {}",
+            asset.symbol, polygon_ticker, interval, start_str, end_str,
         )
 
-        ticker = yf.Ticker(asset.symbol)
-        hist: pd.DataFrame = ticker.history(
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            interval=interval,
-            auto_adjust=True,
+        all_results: list[dict] = []
+        url = (
+            f"{_MASSIVE_BASE_URL}/v2/aggs/ticker/{polygon_ticker}"
+            f"/range/{multiplier}/{timespan}/{start_str}/{end_str}"
         )
+        params = {"adjusted": "true", "sort": "asc", "limit": "50000"}
 
-        if hist.empty:
-            logger.warning("No data returned for {}", asset.symbol)
+        self._wait_for_rate_limit()
+        resp = self._session.get(url, params=params, timeout=30)
+        resp = self._handle_429(resp, url, params=params)
+        data = resp.json()
+
+        if data.get("resultsCount", 0) == 0:
+            logger.warning("No data returned for {} ({})", asset.symbol, polygon_ticker)
             return pd.DataFrame(columns=OHLCV_COLUMNS)
 
-        hist = hist.reset_index()
-        date_col = "Date" if "Date" in hist.columns else "Datetime"
+        all_results.extend(data.get("results", []))
+
+        # Pagination: Polygon uses next_url for large result sets
+        while data.get("next_url"):
+            self._wait_for_rate_limit()
+            resp = self._session.get(data["next_url"], timeout=30)
+            resp = self._handle_429(resp, data["next_url"])
+            data = resp.json()
+            all_results.extend(data.get("results", []))
+
         result = pd.DataFrame(
             {
-                "timestamp": pd.to_datetime(hist[date_col], utc=True),
-                "open": hist["Open"].astype(float),
-                "high": hist["High"].astype(float),
-                "low": hist["Low"].astype(float),
-                "close": hist["Close"].astype(float),
-                "volume": hist["Volume"].astype(float),
+                "timestamp": pd.to_datetime(
+                    [r["t"] for r in all_results], unit="ms", utc=True,
+                ),
+                "open": [float(r["o"]) for r in all_results],
+                "high": [float(r["h"]) for r in all_results],
+                "low": [float(r["l"]) for r in all_results],
+                "close": [float(r["c"]) for r in all_results],
+                "volume": [float(r["v"]) for r in all_results],
             }
         )
         result = result.sort_values("timestamp").reset_index(drop=True)
-        logger.info("FuturesProvider returned {} bars for {}", len(result), asset.symbol)
-        return result
-
-
-# ---------------------------------------------------------------------------
-# Options provider (yfinance chain + underlying OHLCV)
-# ---------------------------------------------------------------------------
-class OptionsProvider(BaseProvider):
-    """Fetches option data using the underlying stock's OHLCV via *yfinance*,
-    enriched with current option chain Greeks/IV when available.
-
-    For historical signal generation, we use the underlying's price action
-    because free historical OHLCV for individual option contracts is not
-    available. The option chain snapshot provides current IV, volume, OI,
-    bid/ask, and Greeks for the specific contract.
-    """
-
-    def fetch(
-        self,
-        symbol_or_asset: str | Asset,
-        interval: str = "1d",
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-    ) -> pd.DataFrame:
-        """Fetch underlying OHLCV and enrich with option chain data.
-
-        The returned DataFrame has standard OHLCV columns for the underlying
-        plus additional option-specific columns when available:
-        ``implied_volatility``, ``option_volume``, ``open_interest``,
-        ``bid``, ``ask``, ``delta``, ``gamma``, ``theta``.
-        """
-        import yfinance as yf
-
-        asset = _resolve_asset(symbol_or_asset)
-        contract = parse_option_symbol(asset.symbol)
-        if contract is None:
-            raise ValueError(f"Cannot parse option symbol: {asset.symbol}")
-
-        now = datetime.now(tz=timezone.utc)
-        start = start_date or (now - timedelta(days=365))
-        end = end_date or now
-
         logger.info(
-            "OptionsProvider fetching underlying {} for option {} interval={} {} -> {}",
-            contract.underlying, asset.symbol, interval, start.date(), end.date(),
+            "MassiveProvider returned {} bars for {} ({})",
+            len(result), asset.symbol, polygon_ticker,
         )
-
-        # 1. Fetch underlying stock OHLCV
-        ticker = yf.Ticker(contract.underlying)
-        hist: pd.DataFrame = ticker.history(
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            interval=interval,
-            auto_adjust=True,
-        )
-
-        if hist.empty:
-            logger.warning("No data returned for underlying {}", contract.underlying)
-            return pd.DataFrame(columns=OHLCV_COLUMNS)
-
-        hist = hist.reset_index()
-        date_col = "Date" if "Date" in hist.columns else "Datetime"
-        result = pd.DataFrame(
-            {
-                "timestamp": pd.to_datetime(hist[date_col], utc=True),
-                "open": hist["Open"].astype(float),
-                "high": hist["High"].astype(float),
-                "low": hist["Low"].astype(float),
-                "close": hist["Close"].astype(float),
-                "volume": hist["Volume"].astype(float),
-            }
-        )
-        result = result.sort_values("timestamp").reset_index(drop=True)
-
-        # 2. Enrich with current option chain snapshot
-        try:
-            chain = ticker.option_chain(contract.expiration)
-            options_df = chain.calls if contract.option_type == "C" else chain.puts
-            match = options_df[options_df["strike"] == contract.strike]
-            if not match.empty:
-                row = match.iloc[0]
-                # Add option metadata to the last bar
-                result["implied_volatility"] = float(row.get("impliedVolatility", 0.0))
-                result["option_volume"] = float(row.get("volume", 0) or 0)
-                result["open_interest"] = float(row.get("openInterest", 0) or 0)
-                result["bid"] = float(row.get("bid", 0.0))
-                result["ask"] = float(row.get("ask", 0.0))
-                logger.info(
-                    "Option chain enriched: IV={:.2%} Vol={} OI={}",
-                    result["implied_volatility"].iloc[-1],
-                    result["option_volume"].iloc[-1],
-                    result["open_interest"].iloc[-1],
-                )
-            else:
-                logger.warning(
-                    "Strike {} not found in chain for {} exp {}",
-                    contract.strike, contract.underlying, contract.expiration,
-                )
-        except Exception as e:
-            logger.warning("Option chain fetch failed (non-fatal): {}", e)
-
-        logger.info("OptionsProvider returned {} bars for {}", len(result), asset.symbol)
         return result
-
-    def fetch_chain(self, underlying: str, expiration: str) -> dict[str, pd.DataFrame]:
-        """Fetch the full option chain for an underlying + expiration.
-
-        Returns ``{"calls": DataFrame, "puts": DataFrame}``.
-        """
-        import yfinance as yf
-
-        ticker = yf.Ticker(underlying)
-        chain = ticker.option_chain(expiration)
-        return {"calls": chain.calls, "puts": chain.puts}
-
-    def fetch_expirations(self, underlying: str) -> tuple[str, ...]:
-        """List available expiration dates for an underlying."""
-        import yfinance as yf
-
-        ticker = yf.Ticker(underlying)
-        return ticker.options
 
 
 # ---------------------------------------------------------------------------
 # Factory helper
 # ---------------------------------------------------------------------------
 def get_provider(symbol_or_asset: str | Asset | AssetType, **kwargs: object) -> BaseProvider:
-    """Return the appropriate provider for the given symbol, Asset, or AssetType.
+    """Return the MassiveProvider for any asset type.
 
-    Accepts:
-    - A plain symbol string (e.g. ``"AAPL"``, ``"BTC/USDT"``, ``"ES=F"``)
-    - An :class:`Asset` instance
-    - An :class:`AssetType` enum value
+    All asset types (stocks, crypto, futures) are handled by MassiveProvider
+    with internal ticker format conversion.
     """
-    if isinstance(symbol_or_asset, AssetType):
-        asset_type = symbol_or_asset
-    elif isinstance(symbol_or_asset, Asset):
-        asset_type = symbol_or_asset.asset_type
-    else:
-        asset = asset_from_symbol(symbol_or_asset)
-        asset_type = asset.asset_type
-
-    providers: dict[AssetType, type[BaseProvider]] = {
-        AssetType.STOCK: StockProvider,
-        AssetType.CRYPTO: CryptoProvider,
-        AssetType.FUTURES: FuturesProvider,
-        AssetType.OPTIONS: OptionsProvider,
-    }
-    cls = providers.get(asset_type)
-    if cls is None:
-        raise ValueError(f"No provider for asset type {asset_type}")
-    return cls(**kwargs)  # type: ignore[arg-type]
+    return MassiveProvider(**kwargs)  # type: ignore[arg-type]

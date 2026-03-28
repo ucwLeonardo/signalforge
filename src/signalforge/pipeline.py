@@ -117,15 +117,11 @@ def run_pipeline(
 
         try:
             lookback = _get_lookback_days(sym_type, config)
-            exchange_id = config.data.crypto_exchange if sym_type == "crypto" else None
 
             if fetcher is not None:
-                df = fetcher.fetch(symbol, interval, lookback, exchange_id=exchange_id)
+                df = fetcher.fetch(symbol, interval, lookback)
             else:
-                provider_kwargs = {}
-                if exchange_id:
-                    provider_kwargs["exchange_id"] = exchange_id
-                provider = get_provider(symbol, **provider_kwargs)
+                provider = get_provider(symbol)
                 end = datetime.now()
                 start = end - timedelta(days=lookback)
                 df = provider.fetch(symbol, interval, start, end)

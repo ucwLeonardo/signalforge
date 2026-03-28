@@ -13,6 +13,7 @@ is available (``GEMINI_API_KEY`` not set).
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import time
 from dataclasses import dataclass
@@ -21,6 +22,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from loguru import logger
+
+_GEMINI_TIMEOUT = 30  # seconds — abort Gemini API call
 
 from signalforge.engines.base import PredictionEngine
 
@@ -437,7 +440,12 @@ class AgentsEngine(PredictionEngine):
         """
         if _GEMINI_AVAILABLE and self._config.enabled:
             try:
-                result = _run_gemini_analysis(df, self._config)
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                future = pool.submit(_run_gemini_analysis, df, self._config)
+                try:
+                    result = future.result(timeout=_GEMINI_TIMEOUT)
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
                 signal = {
                     "direction": result["direction"],
                     "confidence": result["confidence"],

@@ -829,22 +829,10 @@
     </div>
     <div class="controls-divider"></div>
     <div class="controls-group">
-      <div class="dropdown-wrapper">
-        <button class="btn btn-sm btn-primary" onclick="toggleAutoBuildMenu()" aria-label="Run scan pipeline" aria-haspopup="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          Scan
-        </button>
-        <div id="ab-menu" class="dropdown-menu" role="menu">
-          <div class="dropdown-label">Asset Categories</div>
-          <label><input type="checkbox" class="ab-cat" value="us_stocks" checked> US Stocks</label>
-          <label><input type="checkbox" class="ab-cat" value="crypto" checked> Crypto</label>
-          <label><input type="checkbox" class="ab-cat" value="futures"> Futures</label>
-          <label><input type="checkbox" class="ab-cat" value="options"> Options</label>
-          <div style="margin-top:12px;">
-            <button class="btn btn-sm btn-primary" style="width:100%;" onclick="startScan()">Start Scan</button>
-          </div>
-        </div>
-      </div>
+      <button class="btn btn-sm btn-primary" onclick="startScan()" aria-label="Run scan pipeline">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Scan
+      </button>
     </div>
     <div class="controls-divider"></div>
     <div class="controls-group">
@@ -1263,18 +1251,8 @@
     panel.classList.add('active');
 
     var entry = (s.symbol || '') + ' | ' + (stageNames[s.stage] || s.stage) + ' | ' + (s.detail || '');
-    if (entry !== _lastLogEntry && s.stage) {
-      var time = new Date().toLocaleTimeString('en-US', { timeZone: TZ, hour12: false });
-      var color = {data:'var(--blue)',lstm:'var(--purple)',gbm:'var(--amber)',technical:'var(--green)',agents:'var(--red)',ensemble:'var(--text-secondary)',done:'var(--green)',complete:'var(--green)',error:'var(--red)'}[s.stage] || 'var(--text-secondary)';
-      _scanLog.push('<span style="color:var(--text-tertiary)">' + time + '</span> '
-        + (s.symbol ? '<span style="color:var(--text-primary);font-weight:600">' + escHtml(s.symbol) + '</span> ' : '')
-        + '<span style="color:' + color + '">[' + (stageNames[s.stage] || s.stage) + ']</span> '
-        + escHtml(s.detail || ''));
-      _lastLogEntry = entry;
-      var logEl = document.getElementById('sp-log');
-      logEl.innerHTML = _scanLog.join('<br>');
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+    // Log entries are synced from server-side log only (see _syncServerLog)
+    // to avoid duplicate/out-of-order entries from client-side polling
   }
 
   function _hideProgressPanel() {
@@ -1302,8 +1280,15 @@
     });
     _syncedLogCount = serverLog.length;
     var logEl = document.getElementById('sp-log');
+    // Preserve scroll position — do not auto-scroll to bottom
+    var prevScrollTop = logEl.scrollTop;
+    var wasAtBottom = (logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20);
     logEl.innerHTML = _scanLog.join('<br>');
-    logEl.scrollTop = logEl.scrollHeight;
+    if (wasAtBottom) {
+      logEl.scrollTop = logEl.scrollHeight;
+    } else {
+      logEl.scrollTop = prevScrollTop;
+    }
   }
 
   window.cancelScan = async function() {
@@ -1321,33 +1306,26 @@
     toggle.classList.toggle('open', !visible);
   };
 
-  window.toggleAutoBuildMenu = function() {
-    var menu = document.getElementById('ab-menu');
-    menu.classList.toggle('active');
-  };
-
-  document.addEventListener('click', function(e) {
-    var menu = document.getElementById('ab-menu');
-    if (menu && menu.classList.contains('active') && !e.target.closest('#ab-menu') && !e.target.closest('[onclick*="toggleAutoBuildMenu"]')) {
-      menu.classList.remove('active');
-    }
-  });
 
   // Close modal on Escape
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
       var modal = document.getElementById('create-account-modal');
       if (modal.classList.contains('active')) hideCreateAccountModal();
-      var menu = document.getElementById('ab-menu');
-      if (menu.classList.contains('active')) menu.classList.remove('active');
     }
   });
 
   window.startScan = async function() {
-    var catList = [];
-    document.querySelectorAll('.ab-cat:checked').forEach(function(cb) { catList.push(cb.value); });
-    if (catList.length === 0) { showToast('Select at least one category', 'error'); return; }
-    document.getElementById('ab-menu').classList.remove('active');
+    // Get categories from current account's asset_categories
+    var catList = ['us_stocks', 'crypto']; // default
+    try {
+      var data = await fetch('/api/accounts').then(function(r) { return r.json(); });
+      var acct = (data.accounts || []).find(function(a) { return a.name === currentAccount; });
+      if (acct && acct.asset_categories && acct.asset_categories.length > 0) {
+        catList = acct.asset_categories;
+      }
+    } catch (e) { /* use defaults */ }
+    if (catList.length === 0) { showToast('Account has no asset categories configured', 'error'); return; }
 
     _scanLog = []; _lastLogEntry = ''; _syncedLogCount = 0;
     _updateProgressPanel({ total: 0, completed: 0, symbol: '', stage: 'starting', detail: 'Sending request...' });

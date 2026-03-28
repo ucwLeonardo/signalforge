@@ -86,6 +86,7 @@ class LSTMConfig:
     lr: float = 1e-3
     mc_samples: int = 20
     device: str = "cuda"
+    model_dir: str = "~/.signalforge/models/lstm"
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class GBMConfig:
     label_horizon: int = 5
     feature_windows: tuple[int, ...] = (5, 10, 20, 40)
     min_train_rows: int = 60
+    model_dir: str = "~/.signalforge/models/gbm"
 
 
 @dataclass(frozen=True)

@@ -7,12 +7,25 @@ has a graceful fallback so the system works even without network access.
 
 from __future__ import annotations
 
+import concurrent.futures
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
 if TYPE_CHECKING:
     from signalforge.config import Config
+
+_DISCOVERY_TIMEOUT = 15  # seconds — abort discovery and use fallback
+
+
+def _run_with_timeout(fn, timeout: int = _DISCOVERY_TIMEOUT):
+    """Run *fn* in a thread with a hard timeout. Returns result or raises."""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=timeout)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 # ---------------------------------------------------------------------------
@@ -63,22 +76,9 @@ def discover_stocks(
     """Discover US stock tickers from the S&P 500 Wikipedia table.
 
     Falls back to a hardcoded list of top US stocks by market cap when
-    the network request fails.
-
-    Parameters
-    ----------
-    max_symbols:
-        Maximum number of tickers to return.
-    min_market_cap:
-        Minimum market cap filter (reserved for future use; the Wikipedia
-        table does not expose market cap directly).
-
-    Returns
-    -------
-    list[str]
-        Up to *max_symbols* ticker strings, sorted alphabetically.
+    the network request fails or times out.
     """
-    try:
+    def _fetch_sp500() -> list[str]:
         import pandas as pd
 
         tables = pd.read_html(
@@ -88,7 +88,6 @@ def discover_stocks(
             raise ValueError("No tables found on S&P 500 Wikipedia page")
 
         sp500_table = tables[0]
-        # The ticker column is typically named "Symbol"
         col = sp500_table.columns[0]
         tickers = (
             sp500_table[col]
@@ -97,7 +96,10 @@ def discover_stocks(
             .str.replace(".", "-", regex=False)
             .tolist()
         )
-        tickers = sorted(set(tickers))[:max_symbols]
+        return sorted(set(tickers))[:max_symbols]
+
+    try:
+        tickers = _run_with_timeout(_fetch_sp500)
         logger.info(
             "Discovered {} S&P 500 stocks from Wikipedia", len(tickers)
         )
@@ -119,90 +121,53 @@ def discover_stocks(
 # ---------------------------------------------------------------------------
 
 def discover_crypto(
-    exchange_id: str = "gate",
     quote: str = "USDT",
     max_symbols: int = 200,
-    min_volume_usd: float = 1e6,
+    **_kwargs: object,
 ) -> list[str]:
-    """Discover actively-traded crypto pairs from a ccxt exchange.
+    """Return curated list of popular crypto pairs.
 
-    Filters by quote currency, active status, and 24-hour volume.
-    Falls back to a hardcoded list of popular pairs on failure.
-
-    Parameters
-    ----------
-    exchange_id:
-        ccxt exchange identifier (e.g. ``"gate"``, ``"binance"``).
-    quote:
-        Quote currency to filter by (e.g. ``"USDT"``).
-    max_symbols:
-        Maximum number of pairs to return.
-    min_volume_usd:
-        Minimum 24h volume in USD to include a pair.
-
-    Returns
-    -------
-    list[str]
-        Up to *max_symbols* ``"BASE/QUOTE"`` strings, sorted by volume
-        descending.
+    Uses the Massive (Polygon) API to discover crypto tickers when
+    available, falling back to a hardcoded list of top pairs.
     """
+    def _fetch_crypto() -> list[str]:
+        import os
+        import requests
+
+        api_key = os.environ.get("MASSIVE_API_KEY", "")
+        if not api_key:
+            raise ValueError("MASSIVE_API_KEY not set")
+
+        resp = requests.get(
+            "https://api.polygon.io/v3/reference/tickers",
+            params={
+                "market": "crypto",
+                "active": "true",
+                "limit": "1000",
+                "apiKey": api_key,
+            },
+            timeout=_DISCOVERY_TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+
+        # Convert Polygon tickers (X:BTCUSD) → SignalForge format (BTC/USDT)
+        pairs: list[str] = []
+        for r in results:
+            ticker = r.get("ticker", "")
+            if ticker.startswith("X:") and ticker.endswith("USD"):
+                base = ticker[2:-3]  # X:BTCUSD → BTC
+                pairs.append(f"{base}/{quote}")
+
+        logger.info("Discovered {} crypto pairs from Massive API", len(pairs))
+        return pairs[:max_symbols]
+
     try:
-        import ccxt  # type: ignore[import-untyped]
-
-        exchange_cls = getattr(ccxt, exchange_id, None)
-        if exchange_cls is None:
-            raise ValueError(f"Unknown ccxt exchange: {exchange_id}")
-
-        exchange = exchange_cls()
-        exchange.load_markets()
-
-        # Collect active markets matching the requested quote currency
-        candidate_symbols: list[str] = []
-        for symbol, market in exchange.markets.items():
-            if (
-                market.get("quote") == quote
-                and market.get("active", True)
-                and market.get("spot", True)
-            ):
-                candidate_symbols.append(symbol)
-
-        if not candidate_symbols:
-            raise ValueError(
-                f"No active {quote} spot markets found on {exchange_id}"
-            )
-
-        logger.info(
-            "Found {} candidate {}/{} pairs on {}, fetching volumes...",
-            len(candidate_symbols), "*", quote, exchange_id,
-        )
-
-        # Fetch tickers for volume ranking (batch to avoid timeout)
-        try:
-            # Only fetch top 100 to avoid Gate.io timeout
-            batch = candidate_symbols[:100]
-            exchange.timeout = 15000  # 15s timeout
-            tickers = exchange.fetch_tickers(batch)
-            volume_pairs: list[tuple[str, float]] = []
-            for sym in batch:
-                ticker = tickers.get(sym, {})
-                vol_quote = ticker.get("quoteVolume") or 0.0
-                if vol_quote >= min_volume_usd:
-                    volume_pairs.append((sym, float(vol_quote)))
-
-            volume_pairs.sort(key=lambda p: p[1], reverse=True)
-            result = [p[0] for p in volume_pairs[:max_symbols]]
-        except Exception as ticker_exc:
-            logger.warning("Ticker fetch failed ({}), using alphabetical", ticker_exc)
-            result = sorted(candidate_symbols)[:max_symbols]
-
-        logger.info(
-            "Discovered {} crypto pairs on {} (quote={})",
-            len(result),
-            exchange_id,
-            quote,
-        )
-        return result
-
+        result = _run_with_timeout(_fetch_crypto)
+        if result:
+            return result
+        raise ValueError("Empty result from Massive crypto discovery")
     except Exception as exc:
         logger.warning(
             "Crypto discovery failed ({}), using fallback crypto list", exc
@@ -219,13 +184,7 @@ def discover_crypto(
 # ---------------------------------------------------------------------------
 
 def discover_futures() -> list[str]:
-    """Return a curated list of main US futures symbols for yfinance.
-
-    Returns
-    -------
-    list[str]
-        Futures symbols such as ``"ES=F"``, ``"GC=F"``, etc.
-    """
+    """Return a curated list of main US futures symbols for yfinance."""
     logger.info("Using curated list of {} US futures", len(_FUTURES))
     return list(_FUTURES)
 
@@ -243,20 +202,6 @@ def discover_all(
     Config-defined symbols are always included.  Discovered symbols are
     added on top (deduplicated).  If discovery fails for a category the
     config symbols alone are returned for that category.
-
-    Parameters
-    ----------
-    categories:
-        List of category names: ``"us_stocks"``, ``"crypto"``,
-        ``"futures"``, ``"options"``.
-    config:
-        Optional :class:`Config` instance.  When ``None`` the default
-        config is loaded.
-
-    Returns
-    -------
-    list[str]
-        Combined, deduplicated symbol list.
     """
     if config is None:
         from signalforge.config import load_config
@@ -285,8 +230,7 @@ def discover_all(
 
     if "crypto" in categories:
         try:
-            exchange_id = config.data.crypto_exchange
-            discovered.extend(discover_crypto(exchange_id=exchange_id))
+            discovered.extend(discover_crypto())
         except Exception as exc:
             logger.warning("Crypto discovery error: {}", exc)
 

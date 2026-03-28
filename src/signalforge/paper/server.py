@@ -258,12 +258,29 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "unrealized_pnl": round(portfolio.unrealized_pnl, 2),
             "positions": [p.to_dict() for p in portfolio.positions],
             "created_at": portfolio.created_at.isoformat(),
+            "asset_categories": portfolio.asset_categories,
             "value_history": history,
         })
 
+    @staticmethod
+    def _classify_symbol(symbol: str) -> str:
+        """Classify a symbol into a category name."""
+        if "/" in symbol:
+            return "crypto"
+        if symbol.endswith("=F"):
+            return "futures"
+        return "us_stocks"
+
     def _handle_signals(self, params: dict[str, str]) -> None:
-        """Return cached signals. Pipeline only runs on auto-build or POST /api/scan."""
+        """Return cached signals, filtered by account's asset_categories."""
         global _cached_signals
+        # Load account's allowed categories
+        manager = self._get_manager(params)
+        allowed_categories: set[str] | None = None
+        if manager.exists():
+            portfolio = manager.load()
+            allowed_categories = set(portfolio.asset_categories)
+
         self._send_json([
             {
                 "symbol": s.symbol,
@@ -277,6 +294,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 "rationale": s.rationale,
             }
             for s in _cached_signals
+            if allowed_categories is None or self._classify_symbol(s.symbol) in allowed_categories
         ])
 
     def _handle_history(self, params: dict[str, str]) -> None:
@@ -479,8 +497,9 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 return
             balance = float(body.get("balance", 5000))
             force = body.get("force", False)
+            asset_categories = body.get("asset_categories")
             am = self.__class__.account_manager
-            am.create_account(name, balance=balance, force=force)
+            am.create_account(name, balance=balance, force=force, asset_categories=asset_categories)
             self._send_json(am.get_account_summary(name), status=HTTPStatus.CREATED)
         except (ValueError, FileExistsError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -715,11 +734,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
-    # Bypass proxy for data downloads (yfinance, ccxt, Wikipedia)
-    import os
-    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(var, None)
-
     args = _parse_args(argv)
 
     am = AccountManager()

@@ -17,10 +17,7 @@ from signalforge.data.models import (
 )
 from signalforge.data.providers import (
     BaseProvider,
-    CryptoProvider,
-    FuturesProvider,
-    OptionsProvider,
-    StockProvider,
+    MassiveProvider,
     get_provider,
 )
 from signalforge.data.store import DataStore
@@ -32,13 +29,10 @@ __all__ = [
     "Bar",
     "BaseProvider",
     "CombinedSignal",
-    "CryptoProvider",
     "DataStore",
-    "FuturesProvider",
+    "MassiveProvider",
     "OptionContract",
-    "OptionsProvider",
     "Signal",
-    "StockProvider",
     "SupportResistance",
     "TradeAction",
     "TradeTarget",

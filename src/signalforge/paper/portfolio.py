@@ -50,7 +50,12 @@ class PortfolioManager:
     def exists(self) -> bool:
         return self._path.exists()
 
-    def init(self, balance: float = 5000.0, force: bool = False) -> Portfolio:
+    def init(
+        self,
+        balance: float = 5000.0,
+        force: bool = False,
+        asset_categories: list[str] | None = None,
+    ) -> Portfolio:
         """Create a fresh portfolio. If force=True, overwrite existing."""
         if self._path.exists() and not force:
             raise FileExistsError(
@@ -62,6 +67,7 @@ class PortfolioManager:
             trades=[],
             initial_balance=balance,
             created_at=datetime.now(),
+            asset_categories=asset_categories if asset_categories is not None else ["us_stocks", "crypto"],
         )
         self._save(portfolio)
         # Also clear value history
@@ -80,10 +86,13 @@ class PortfolioManager:
 
     def reset(self, balance: float | None = None) -> Portfolio:
         """Reset portfolio to initial state. Uses stored initial_balance if no balance given."""
-        if balance is None and self._path.exists():
+        old_categories: list[str] | None = None
+        if self._path.exists():
             old = self.load()
-            balance = old.initial_balance
-        return self.init(balance=balance or 5000.0, force=True)
+            if balance is None:
+                balance = old.initial_balance
+            old_categories = old.asset_categories
+        return self.init(balance=balance or 5000.0, force=True, asset_categories=old_categories)
 
     def load(self) -> Portfolio:
         """Load portfolio from JSON file. Re-initializes if file is corrupt."""
@@ -96,6 +105,7 @@ class PortfolioManager:
                 trades=[trade_from_dict(t) for t in data["trades"]],
                 initial_balance=data["initial_balance"],
                 created_at=datetime.fromisoformat(data["created_at"]),
+                asset_categories=data.get("asset_categories", ["us_stocks", "crypto"]),
             )
         except (json.JSONDecodeError, KeyError) as exc:
             # Corrupt file — re-initialize with default balance
@@ -114,6 +124,7 @@ class PortfolioManager:
             "trades": [t.to_dict() for t in portfolio.trades],
             "initial_balance": portfolio.initial_balance,
             "created_at": portfolio.created_at.isoformat(),
+            "asset_categories": portfolio.asset_categories,
         }
         with open(self._path, "w") as f:
             json.dump(data, f, indent=2)
@@ -245,11 +256,15 @@ class AccountManager:
         return PortfolioManager(path=_account_dir(name) / "portfolio.json")
 
     def create_account(
-        self, name: str, balance: float = 5000.0, force: bool = False
+        self,
+        name: str,
+        balance: float = 5000.0,
+        force: bool = False,
+        asset_categories: list[str] | None = None,
     ) -> PortfolioManager:
         """Create (or force-recreate) a named account."""
         mgr = self.get_manager(name)
-        mgr.init(balance=balance, force=force)
+        mgr.init(balance=balance, force=force, asset_categories=asset_categories)
         return mgr
 
     def delete_account(self, name: str) -> None:
@@ -281,4 +296,5 @@ class AccountManager:
             "positions_count": len(p.positions),
             "trades_count": len(p.trades),
             "created_at": p.created_at.isoformat(),
+            "asset_categories": p.asset_categories,
         }
