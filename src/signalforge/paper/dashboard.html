@@ -66,6 +66,7 @@
 
   body {
     font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 15px;
     background: var(--bg-base);
     color: var(--text-primary);
     line-height: 1.5;
@@ -125,7 +126,7 @@
   }
 
   header h1 {
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 600;
     letter-spacing: -0.3px;
     white-space: nowrap;
@@ -153,7 +154,7 @@
   }
 
   header .status {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-tertiary);
     font-family: 'Fira Code', monospace;
     white-space: nowrap;
@@ -176,7 +177,7 @@
     gap: 6px;
     padding: 8px 16px;
     min-height: 36px;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
     font-family: inherit;
     border: 1px solid var(--border);
@@ -215,9 +216,9 @@
   .btn-red:hover { background: rgba(248, 113, 113, 0.2); }
 
   .btn-sm {
-    padding: 5px 12px;
-    min-height: 30px;
-    font-size: 12px;
+    padding: 6px 14px;
+    min-height: 32px;
+    font-size: 13px;
   }
 
   .btn-ghost {
@@ -258,7 +259,7 @@
     justify-content: space-between;
     padding: 14px 20px;
     border-bottom: 1px solid var(--border);
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 600;
     gap: 12px;
   }
@@ -278,33 +279,36 @@
   /* ===== Summary Bar ===== */
   .summary-bar {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+    grid-template-columns: auto 1fr;
     gap: 12px;
+    align-items: stretch;
   }
-  .summary-item {
+  .summary-hero {
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: 16px 20px;
-    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+    padding: 24px 28px;
     position: relative;
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 220px;
+    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
   }
-  .summary-item::before {
+  .summary-hero::before {
     content: '';
     position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: var(--blue);
-    opacity: 0.5;
+    top: 0; left: 0; bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, var(--blue), var(--green));
+    opacity: 0.8;
   }
-  .summary-item:hover {
+  .summary-hero:hover {
     border-color: var(--border-hover);
     box-shadow: var(--shadow-card);
   }
-  .summary-item .label {
+  .summary-hero .label {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.8px;
@@ -312,17 +316,55 @@
     margin-bottom: 6px;
     font-weight: 500;
   }
+  .summary-hero .value {
+    font-family: 'Fira Code', monospace;
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .summary-hero .sub {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-top: 6px;
+  }
+  .summary-secondary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: auto auto;
+    gap: 10px;
+  }
+  .summary-item {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    transition: border-color var(--transition-normal);
+    overflow: hidden;
+  }
+  .summary-item:hover {
+    border-color: var(--border-hover);
+  }
+  .summary-item .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-tertiary);
+    margin-bottom: 3px;
+    font-weight: 500;
+  }
   .summary-item .value {
     font-family: 'Fira Code', monospace;
-    font-size: 22px;
+    font-size: 15px;
     font-weight: 600;
     line-height: 1.2;
   }
-  .summary-item .value.large { font-size: 28px; }
+  .summary-item.prominent .value {
+    font-size: 18px;
+  }
   .summary-item .sub {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-secondary);
-    margin-top: 4px;
+    margin-top: 2px;
   }
 
   .positive { color: var(--green); }
@@ -459,6 +501,16 @@
     font-size: 15px;
     letter-spacing: -0.2px;
   }
+  .cat-tag {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--blue-muted);
+    color: var(--blue);
+    border: 1px solid var(--blue-border);
+  }
   .signal-card .signal-action {
     font-size: 11px;
     font-weight: 700;
@@ -481,22 +533,22 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
   }
   .signal-card .signal-metrics .metric-label {
     color: var(--text-tertiary);
-    font-size: 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
     font-weight: 500;
   }
   .signal-card .signal-metrics .metric-value {
     font-family: 'Fira Code', monospace;
-    font-size: 13px;
+    font-size: 14px;
     margin-top: 2px;
   }
   .signal-card .signal-rationale {
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-secondary);
     line-height: 1.5;
     overflow: hidden;
@@ -699,7 +751,7 @@
     transform: scale(1) translateY(0);
   }
   .modal h3 {
-    font-size: 17px;
+    font-size: 18px;
     font-weight: 600;
     margin-bottom: 20px;
     letter-spacing: -0.2px;
@@ -782,10 +834,12 @@
     header { padding: 12px 16px; }
     header h1 { font-size: 15px; }
     .container { padding: 16px; gap: 16px; }
-    .summary-bar { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-    .summary-item { padding: 12px 14px; }
-    .summary-item .value { font-size: 18px; }
-    .summary-item .value.large { font-size: 22px; }
+    .summary-bar { grid-template-columns: 1fr; }
+    .summary-secondary { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .summary-hero .value { font-size: 26px; }
+    .summary-hero { min-width: unset; }
+    .summary-item .value { font-size: 14px; }
+    .summary-item.prominent .value { font-size: 16px; }
     .signals-grid { grid-template-columns: 1fr; }
     .card-body { padding: 16px; }
     .card-header { padding: 12px 16px; }
@@ -798,11 +852,14 @@
   @media (max-width: 480px) {
     header { flex-direction: column; align-items: stretch; gap: 8px; }
     header .controls { justify-content: flex-start; overflow-x: auto; padding-bottom: 4px; }
-    .summary-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-    .summary-item { padding: 10px 12px; }
-    .summary-item .value { font-size: 16px; }
-    .summary-item .value.large { font-size: 20px; }
-    .summary-item .label { font-size: 10px; }
+    .summary-bar { grid-template-columns: 1fr; }
+    .summary-secondary { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .summary-hero .value { font-size: 22px; }
+    .summary-hero { min-width: unset; }
+    .summary-item { padding: 8px 10px; }
+    .summary-item .value { font-size: 13px; }
+    .summary-item.prominent .value { font-size: 15px; }
+    .summary-item .label { font-size: 9px; }
   }
 </style>
 </head>
@@ -834,7 +891,7 @@
         Scan All
       </button>
       <button class="btn btn-sm" onclick="startScan(true)" aria-label="Scan watchlist only (config symbols)" style="border-color:var(--amber);color:var(--amber);">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         Watchlist
       </button>
       <button class="btn btn-sm btn-ghost" onclick="showWatchlistModal()" aria-label="Edit watchlist" title="Edit watchlist">
@@ -927,35 +984,106 @@
   </div>
 </div>
 
+<!-- Reusable Confirm Modal -->
+<div id="confirm-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Confirm action" onclick="if(event.target===this)_confirmReject()">
+  <div class="modal" style="max-width:480px;">
+    <h3 id="confirm-modal-title">Confirm</h3>
+    <div id="confirm-modal-body" style="color:var(--text-secondary);line-height:1.6;white-space:pre-line;"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
+      <button class="btn btn-sm" id="confirm-modal-cancel" onclick="_confirmReject()">Cancel</button>
+      <button class="btn btn-sm btn-primary" id="confirm-modal-ok" onclick="_confirmResolve()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Categories Edit Modal -->
+<div id="categories-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Edit asset categories" onclick="if(event.target===this)hideCategoriesModal()">
+  <div class="modal" style="max-width:400px;">
+    <h3>Asset Categories</h3>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px;">Select which asset types this account can trade and scan.</p>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);transition:border-color var(--transition-fast);">
+        <input type="checkbox" id="cat-us-stocks" value="us_stocks" style="accent-color:var(--blue);width:16px;height:16px;">
+        <div>
+          <div style="font-weight:500;">US Stocks</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">AAPL, MSFT, GOOGL...</div>
+        </div>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);transition:border-color var(--transition-fast);">
+        <input type="checkbox" id="cat-crypto" value="crypto" style="accent-color:var(--blue);width:16px;height:16px;">
+        <div>
+          <div style="font-weight:500;">Crypto</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">BTC/USDT, ETH/USDT...</div>
+        </div>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);transition:border-color var(--transition-fast);">
+        <input type="checkbox" id="cat-futures" value="futures" style="accent-color:var(--blue);width:16px;height:16px;">
+        <div>
+          <div style="font-weight:500;">Futures</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">ES=F, GC=F, CL=F...</div>
+        </div>
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);transition:border-color var(--transition-fast);">
+        <input type="checkbox" id="cat-options" value="options" style="accent-color:var(--blue);width:16px;height:16px;">
+        <div>
+          <div style="font-weight:500;">Options</div>
+          <div style="font-size:12px;color:var(--text-tertiary);">Equity options contracts</div>
+        </div>
+      </label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px;">
+      <button class="btn btn-sm" onclick="hideCategoriesModal()">Cancel</button>
+      <button class="btn btn-sm btn-primary" onclick="saveCategories()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="container">
   <!-- A) Portfolio Overview (hidden until positions/trades exist) -->
   <div id="portfolio-overview" style="display:none;">
     <div class="summary-bar" id="summary-bar">
-      <div class="summary-item">
+      <div class="summary-hero">
         <div class="label">Total Value</div>
-        <div class="value large mono" id="s-total-value">--</div>
-      </div>
-      <div class="summary-item">
-        <div class="label">Cash</div>
-        <div class="value mono" id="s-cash">--</div>
-      </div>
-      <div class="summary-item">
-        <div class="label">Positions Value</div>
-        <div class="value mono" id="s-positions-value">--</div>
-      </div>
-      <div class="summary-item">
-        <div class="label">Total P&amp;L</div>
-        <div class="value mono" id="s-total-pnl">--</div>
+        <div class="value mono" id="s-total-value">--</div>
         <div class="sub mono" id="s-total-pnl-pct">--</div>
       </div>
-      <div class="summary-item">
-        <div class="label">Unrealized P&amp;L</div>
-        <div class="value mono" id="s-unrealized-pnl">--</div>
+      <div class="summary-secondary">
+        <div class="summary-item prominent">
+          <div class="label">Total P&amp;L</div>
+          <div class="value mono" id="s-total-pnl">--</div>
+        </div>
+        <div class="summary-item">
+          <div class="label">Cash</div>
+          <div class="value mono" id="s-cash">--</div>
+        </div>
+        <div class="summary-item">
+          <div class="label">Positions</div>
+          <div class="value mono" id="s-positions-value">--</div>
+        </div>
+        <div class="summary-item prominent">
+          <div class="label">Unrealized</div>
+          <div class="value mono" id="s-unrealized-pnl">--</div>
+        </div>
+        <div class="summary-item">
+          <div class="label">Realized</div>
+          <div class="value mono" id="s-realized-pnl">--</div>
+        </div>
+        <div class="summary-item">
+          <div class="label">Positions #</div>
+          <div class="value mono" id="s-positions-count">0</div>
+        </div>
       </div>
-      <div class="summary-item">
-        <div class="label">Realized P&amp;L</div>
-        <div class="value mono" id="s-realized-pnl">--</div>
-      </div>
+    </div>
+  </div>
+
+  <!-- A2) Account Categories -->
+  <div id="account-categories" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-raised);">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="font-size:13px;color:var(--text-tertiary);">Categories:</span>
+      <div id="category-tags" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <button class="btn btn-sm btn-ghost" onclick="showCategoriesModal()" aria-label="Edit asset categories" title="Edit categories" style="padding:3px 6px;min-height:24px;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      </button>
     </div>
   </div>
 
@@ -997,12 +1125,14 @@
 
   <!-- D) Open Positions -->
   <div class="card">
-    <div class="card-header">
-      <span class="card-header-title">
+    <div class="card-header" style="flex-wrap:wrap;gap:8px;">
+      <span class="card-header-title collapsible-toggle open" id="positions-toggle" onclick="togglePositions()" role="button" tabindex="0" style="cursor:pointer;" aria-expanded="true" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();togglePositions();}">
+        <span class="arrow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>
         Open Positions
       </span>
-      <button class="btn btn-sm btn-primary" onclick="toggleOpenForm()">
+      <span id="positions-summary" class="mono" style="font-size:13px;color:var(--text-secondary);"></span>
+      <button class="btn btn-sm btn-primary" onclick="toggleOpenForm()" style="margin-left:auto;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Open Position
       </button>
@@ -1060,7 +1190,24 @@
       <span class="card-header-title">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         Available Signals
+        <span id="signals-count" class="mono" style="font-size:13px;color:var(--text-tertiary);margin-left:8px;"></span>
       </span>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+        <label class="mono" style="font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;" title="Only show signals above this confidence">
+          Conf &ge; <span id="confidence-value" style="min-width:36px;text-align:right;">50%</span>
+          <input id="confidence-filter" type="range" min="0" max="100" value="50" step="1"
+                 style="width:160px;accent-color:var(--blue);cursor:pointer;">
+        </label>
+        <label id="build-top-n-label" class="mono" style="font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;">
+          Top
+          <input id="build-top-n" type="number" min="1" max="20" value="5"
+                 style="width:48px;padding:3px 6px;background:var(--bg-base);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-primary);font-size:13px;font-family:inherit;text-align:center;">
+        </label>
+        <button id="auto-build-btn" class="btn btn-sm btn-primary" onclick="autoBuildPortfolio()" aria-label="Auto build portfolio from signals">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          Auto Build
+        </button>
+      </div>
     </div>
     <div class="card-body">
       <div id="signals-container">
@@ -1100,10 +1247,43 @@
   // --- State ---
   let portfolio = null;
   let signals = [];
+  let signalsMeta = {};
   let history = [];
   let valueChart = null;
-  let refreshTimer = null;
+  // No refresh timer — all updates are user-triggered or server-side
   let currentAccount = 'default';
+  let minConfidence = parseInt(sessionStorage.getItem('sf_minConf')) || 50;
+
+  // --- Custom Confirm Modal ---
+  let _confirmResolveFn = null;
+  let _confirmRejectFn = null;
+
+  function showConfirm(title, body, opts) {
+    opts = opts || {};
+    document.getElementById('confirm-modal-title').textContent = title;
+    document.getElementById('confirm-modal-body').innerHTML = body;
+    var okBtn = document.getElementById('confirm-modal-ok');
+    okBtn.textContent = opts.okText || 'Confirm';
+    okBtn.className = 'btn btn-sm ' + (opts.danger ? 'btn-red' : 'btn-primary');
+    document.getElementById('confirm-modal-cancel').textContent = opts.cancelText || 'Cancel';
+    document.getElementById('confirm-modal').classList.add('active');
+    return new Promise(function(resolve, reject) {
+      _confirmResolveFn = resolve;
+      _confirmRejectFn = reject;
+    });
+  }
+
+  window._confirmResolve = function() {
+    document.getElementById('confirm-modal').classList.remove('active');
+    if (_confirmResolveFn) _confirmResolveFn(true);
+    _confirmResolveFn = null; _confirmRejectFn = null;
+  };
+
+  window._confirmReject = function() {
+    document.getElementById('confirm-modal').classList.remove('active');
+    if (_confirmResolveFn) _confirmResolveFn(false);
+    _confirmResolveFn = null; _confirmRejectFn = null;
+  };
 
   // --- Utilities ---
   function fmt(n, decimals) {
@@ -1117,7 +1297,16 @@
 
   function fmtUsd(n, decimals) {
     if (n == null || isNaN(n)) return '--';
-    const d = decimals != null ? decimals : 2;
+    var d = decimals;
+    if (d == null) {
+      // Auto-detect decimals for micro-priced assets
+      var abs = Math.abs(n);
+      if (abs === 0) d = 2;
+      else if (abs < 0.001) d = 8;
+      else if (abs < 0.1) d = 4;
+      else if (abs < 1) d = 3;
+      else d = 2;
+    }
     const prefix = n < 0 ? '-$' : '$';
     return prefix + fmt(Math.abs(n), d);
   }
@@ -1397,7 +1586,7 @@
       actionBtn.style.opacity = '0.5';
       actionBtn.onclick = null;
       // Send cancel to server asynchronously
-      await fetch('/api/scan/cancel', { method: 'POST' });
+      await fetch(_appendAccount('/api/scan/cancel'), { method: 'POST' });
     } catch (e) { showToast('Cancel failed', 'error'); }
   };
 
@@ -1490,7 +1679,7 @@
     document.getElementById('sp-log-toggle').classList.remove('open');
     _updateProgressPanel({ total: 0, completed: 0, symbol: '', stage: 'starting', detail: 'Sending request...' });
     try {
-      var res = await fetch('/api/scan', {
+      var res = await fetch(_appendAccount('/api/scan'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ categories: catList, config_only: !!configOnly })
@@ -1501,7 +1690,7 @@
       }
       var pollInterval = setInterval(async function() {
         try {
-          var s = await fetch('/api/scan/status').then(function(r) { return r.json(); });
+          var s = await fetch(_appendAccount('/api/scan/status')).then(function(r) { return r.json(); });
           _updateProgressPanel(s);
           if (s.log && s.log.length > 0) {
             _syncServerLog(s.log);
@@ -1530,7 +1719,12 @@
   };
 
   window.resetCurrentAccount = async function() {
-    if (!confirm('Reset account "' + currentAccount + '"?\n\nAll positions and trades will be cleared. Balance will reset to initial value.')) return;
+    var ok = await showConfirm(
+      'Reset Account',
+      'Reset account <strong>"' + escHtml(currentAccount) + '"</strong>?<br><br>All positions and trades will be cleared. Balance will reset to initial value.',
+      { okText: 'Reset', danger: true }
+    );
+    if (!ok) return;
     try {
       await fetch('/api/accounts/reset', {
         method: 'POST',
@@ -1550,7 +1744,12 @@
   };
 
   window.deleteCurrentAccount = async function() {
-    if (!confirm('DELETE account "' + currentAccount + '"?\n\nThis is permanent and cannot be undone!')) return;
+    var ok = await showConfirm(
+      'Delete Account',
+      'Delete account <strong>"' + escHtml(currentAccount) + '"</strong>?<br><br>This is permanent and cannot be undone.',
+      { okText: 'Delete', danger: true }
+    );
+    if (!ok) return;
     try {
       await fetch('/api/accounts/delete', {
         method: 'POST',
@@ -1571,56 +1770,7 @@
     }
   };
 
-  // --- Live Price Fetching ---
-  const COINGECKO_MAP = {
-    'BTC/USDT': 'bitcoin',
-    'ETH/USDT': 'ethereum',
-    'SOL/USDT': 'solana',
-  };
-
-  async function fetchLivePrices() {
-    var prices = {};
-    try {
-      var ids = [];
-      var symbolToId = {};
-      if (portfolio && portfolio.positions) {
-        portfolio.positions.forEach(function(p) {
-          var cgId = COINGECKO_MAP[p.symbol];
-          if (cgId) { ids.push(cgId); symbolToId[cgId] = p.symbol; }
-        });
-      }
-      Object.keys(COINGECKO_MAP).forEach(function(sym) {
-        var cgId = COINGECKO_MAP[sym];
-        if (ids.indexOf(cgId) === -1) { ids.push(cgId); symbolToId[cgId] = sym; }
-      });
-      if (ids.length > 0) {
-        var r = await fetch(
-          'https://api.coingecko.com/api/v3/simple/price?ids=' + ids.join(',') + '&vs_currencies=usd',
-          {signal: AbortSignal.timeout(8000)}
-        );
-        var data = await r.json();
-        Object.keys(data).forEach(function(cgId) {
-          var sym = symbolToId[cgId];
-          if (sym && data[cgId].usd) prices[sym] = data[cgId].usd;
-        });
-      }
-    } catch (e) { console.warn('CoinGecko fetch failed:', e); }
-
-    try {
-      var serverPrices = await apiGet('/api/prices');
-      if (serverPrices && serverPrices.prices) {
-        Object.keys(serverPrices.prices).forEach(function(sym) {
-          if (!COINGECKO_MAP[sym]) prices[sym] = serverPrices.prices[sym];
-        });
-      }
-    } catch (e) { /* server proxy failed */ }
-
-    if (Object.keys(prices).length > 0) {
-      try {
-        await apiPost('/api/update-prices', { prices: prices });
-      } catch (e) { console.warn('Price push failed:', e); }
-    }
-  }
+  // No frontend price fetching. Server background thread updates all accounts.
 
   // --- Data Fetching ---
   async function fetchPortfolio() {
@@ -1628,10 +1778,64 @@
     renderSummary();
     renderChart();
     renderPositions();
+    renderCategories();
+    // No auto-refresh scheduling — prices are updated server-side
   }
 
+  var CAT_LABELS = {us_stocks: 'Stocks', crypto: 'Crypto', futures: 'Futures', options: 'Options'};
+  function renderCategories() {
+    var wrapper = document.getElementById('account-categories');
+    var tagsEl = document.getElementById('category-tags');
+    if (!portfolio || !portfolio.asset_categories || portfolio.asset_categories.length === 0) {
+      wrapper.style.display = 'none';
+      return;
+    }
+    wrapper.style.display = '';
+    tagsEl.innerHTML = portfolio.asset_categories.map(function(c) {
+      return '<span class="cat-tag">' + escHtml(CAT_LABELS[c] || c) + '</span>';
+    }).join('');
+  }
+
+  window.showCategoriesModal = function() {
+    var cats = (portfolio && portfolio.asset_categories) || [];
+    ['us_stocks', 'crypto', 'futures', 'options'].forEach(function(c) {
+      var el = document.getElementById('cat-' + c.replace('_', '-'));
+      if (el) el.checked = cats.indexOf(c) !== -1;
+    });
+    document.getElementById('categories-modal').classList.add('active');
+  };
+
+  window.hideCategoriesModal = function() {
+    document.getElementById('categories-modal').classList.remove('active');
+  };
+
+  window.saveCategories = async function() {
+    var cats = [];
+    ['us_stocks', 'crypto', 'futures', 'options'].forEach(function(c) {
+      var el = document.getElementById('cat-' + c.replace('_', '-'));
+      if (el && el.checked) cats.push(c);
+    });
+    if (cats.length === 0) {
+      showToast('Select at least one category', 'error');
+      return;
+    }
+    try {
+      await apiPost('/api/accounts/categories', { categories: cats });
+      hideCategoriesModal();
+      showToast('Categories updated');
+      await refreshAll();
+    } catch (e) {
+      showToast('Failed: ' + e.message, 'error');
+    }
+  };
+
   async function fetchSignals() {
-    signals = await apiGet('/api/signals');
+    var [sigs, meta] = await Promise.all([
+      apiGet('/api/signals'),
+      apiGet('/api/signals/meta'),
+    ]);
+    signals = sigs;
+    signalsMeta = meta;
     renderSignals();
   }
 
@@ -1657,14 +1861,7 @@
     } finally {
       showLoading(false);
     }
-    try {
-      await fetchLivePrices();
-      await fetchPortfolio();
-      document.getElementById('last-updated').textContent =
-        new Date().toLocaleString('en-US', {
-          timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-        });
-    } catch (e) { /* price update is best-effort */ }
+    // Prices are updated server-side; no extra fetch needed
   }
 
   // --- Render Summary ---
@@ -1680,7 +1877,7 @@
     pnlEl.className = 'value mono ' + pnlClass(p.total_pnl);
 
     const pctEl = document.getElementById('s-total-pnl-pct');
-    pctEl.textContent = fmtPct(p.total_pnl_pct);
+    pctEl.textContent = fmtUsd(p.total_pnl) + ' (' + fmtPct(p.total_pnl_pct) + ')';
     pctEl.className = 'sub mono ' + pnlClass(p.total_pnl_pct);
 
     const upEl = document.getElementById('s-unrealized-pnl');
@@ -1690,6 +1887,8 @@
     const rpEl = document.getElementById('s-realized-pnl');
     rpEl.textContent = fmtUsd(p.realized_pnl);
     rpEl.className = 'value mono ' + pnlClass(p.realized_pnl);
+
+    document.getElementById('s-positions-count').textContent = (p.positions || []).length;
 
     var hasActivity = (p.positions && p.positions.length > 0) ||
                       (p.trades_count > 0) || (p.realized_pnl !== 0);
@@ -1714,7 +1913,7 @@
       valueChart.data.labels = labels;
       valueChart.data.datasets[0].data = data;
       valueChart.data.datasets[0].pointRadius = data.length === 1 ? 5 : 0;
-      valueChart.update();
+      valueChart.update('none');
       return;
     }
 
@@ -1789,9 +1988,37 @@
   }
 
   // --- Render Positions ---
+  window.togglePositions = function() {
+    var container = document.getElementById('positions-container');
+    var toggle = document.getElementById('positions-toggle');
+    var visible = container.style.display !== 'none';
+    container.style.display = visible ? 'none' : '';
+    toggle.classList.toggle('open', !visible);
+    toggle.setAttribute('aria-expanded', !visible);
+  };
+
   function renderPositions() {
     const container = document.getElementById('positions-container');
+    const summaryEl = document.getElementById('positions-summary');
     const positions = portfolio ? portfolio.positions : [];
+
+    // Summary text in header
+    if (positions && positions.length > 0) {
+      var totalUnrealized = positions.reduce(function(s, p) { return s + (p.unrealized_pnl || 0); }, 0);
+      var longCount = positions.filter(function(p) { return p.side === 'long'; }).length;
+      var shortCount = positions.length - longCount;
+      var parts = [positions.length + ' positions'];
+      if (longCount > 0) parts.push(longCount + ' long');
+      if (shortCount > 0) parts.push(shortCount + ' short');
+      parts.push('Unrealized: ' + fmtUsd(totalUnrealized));
+      summaryEl.innerHTML = parts.join(' · ');
+      summaryEl.querySelector ? null : null; // no-op
+      // Color the unrealized part
+      summaryEl.style.color = totalUnrealized > 0 ? 'var(--green)' : totalUnrealized < 0 ? 'var(--red)' : 'var(--text-secondary)';
+    } else {
+      summaryEl.textContent = '0 positions';
+      summaryEl.style.color = 'var(--text-secondary)';
+    }
 
     if (!positions || positions.length === 0) {
       container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg><p>No open positions</p></div>';
@@ -1872,14 +2099,78 @@
   // --- Render Signals ---
   function renderSignals() {
     const container = document.getElementById('signals-container');
+    const countEl = document.getElementById('signals-count');
+    const buildBtn = document.getElementById('auto-build-btn');
+    const topNInput = document.getElementById('build-top-n');
+    const confInput = document.getElementById('confidence-filter');
 
+    // No signals at all — show empty state, hide all header controls
     if (!signals || signals.length === 0) {
-      container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><p>No signals available. Run a scan to generate signals.</p></div>';
+      var emptyMsg = 'No signals available. Run a scan to generate signals.';
+      if (signalsMeta) {
+        var wl = signalsMeta.watchlist;
+        var fl = signalsMeta.full;
+        var info = wl || fl;
+        if (info) {
+          var when = new Date(info.scanned_at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'});
+          emptyMsg = 'Last scan: ' + when + ' (' + info.scan_type + ', ' + info.count + ' signals). Try lowering confidence filter or run a new scan.';
+        }
+      }
+      container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg><p>' + emptyMsg + '</p></div>';
+      if (countEl) countEl.textContent = '';
+      if (buildBtn) { buildBtn.style.display = 'none'; }
+      if (topNInput) { document.getElementById('build-top-n-label').style.display = 'none'; }
+      if (confInput) { confInput.parentElement.style.display = 'none'; }
       return;
     }
 
+    // Set slider range to [minSignalConf, maxSignalConf] so full range is always usable
+    var confValues = signals.map(function(s) { return Math.round((s.confidence || 0) * 100); });
+    var maxConf = Math.max.apply(null, confValues);
+    var minConf = Math.min.apply(null, confValues);
+    if (confInput) {
+      var prev = minConfidence;
+      confInput.min = minConf;
+      confInput.max = maxConf;
+      // Browser clamps value to [min, max] automatically; sync our state
+      var clamped = parseInt(confInput.value) || 0;
+      if (clamped !== prev) {
+        minConfidence = clamped;
+        sessionStorage.setItem('sf_minConf', minConfidence);
+        document.getElementById('confidence-value').textContent = clamped + '%';
+      }
+    }
+
+    // Apply confidence filter
+    var threshold = minConfidence / 100;
+    var filtered = signals.filter(function(s) { return (s.confidence || 0) >= threshold; });
+
+    var totalCount = signals.length;
+    var buyCount = filtered.filter(function(s) { return s.action && s.action.toUpperCase() === 'BUY'; }).length;
+    var sellCount = filtered.length - buyCount;
+
+    // Build count label with cache freshness
+    var label = filtered.length + '/' + totalCount + ' signals (' + buyCount + ' buy, ' + sellCount + ' sell)';
+    if (signalsMeta) {
+      var meta = signalsMeta.watchlist || signalsMeta.full;
+      if (meta && meta.scanned_at) {
+        var when = new Date(meta.scanned_at).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour:'2-digit', minute:'2-digit'});
+        label += ' · ' + (meta.scan_type === 'watchlist' ? 'WL' : 'Full') + ' ' + when;
+      }
+    }
+    if (countEl) countEl.textContent = label;
+
+    // Show all controls — slider max is clamped so there are always visible signals
+    if (confInput) confInput.parentElement.style.display = '';
+    var topNLabel = document.getElementById('build-top-n-label');
+    if (topNLabel) topNLabel.style.display = '';
+    if (buildBtn) { buildBtn.style.display = ''; buildBtn.disabled = false; buildBtn.style.opacity = ''; }
+    if (topNInput) { topNInput.disabled = false; topNInput.style.opacity = ''; }
+
     let html = '<div class="signals-grid">';
-    signals.forEach(function(sig, idx) {
+    filtered.forEach(function(sig, idx) {
+      // Use original index for tradeSignal
+      var origIdx = signals.indexOf(sig);
       const actionClass = (sig.action && sig.action.toUpperCase() === 'SELL') ? 'sell' : 'buy';
       const conf = sig.confidence != null ? (sig.confidence * 100) : 0;
 
@@ -1898,7 +2189,7 @@
         '</div>' +
         '<div class="confidence-bar" role="progressbar" aria-valuenow="' + Math.round(conf) + '" aria-valuemin="0" aria-valuemax="100" aria-label="Confidence ' + Math.round(conf) + '%"><div class="fill" style="width:' + conf + '%;"></div></div>' +
         (sig.rationale ? '<div class="signal-rationale">' + escHtml(sig.rationale) + '</div>' : '') +
-        '<button class="btn btn-sm btn-green" onclick="tradeSignal(' + idx + ')" style="align-self:flex-start;">' +
+        '<button class="btn btn-sm btn-green" onclick="tradeSignal(' + origIdx + ')" style="align-self:flex-start;">' +
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>' +
           'Trade' +
         '</button>' +
@@ -1912,9 +2203,21 @@
   function renderHistory() {
     const container = document.getElementById('history-container');
     const countEl = document.getElementById('history-count');
-    countEl.textContent = history.length + ' trade' + (history.length !== 1 ? 's' : '');
 
-    if (!history || history.length === 0) {
+    // Merge open positions (as pending trades) + closed trades
+    var openTrades = (portfolio && portfolio.positions || []).map(function(p) {
+      return {
+        symbol: p.symbol, side: p.side, qty: p.qty,
+        entry_price: p.entry_price, exit_price: null,
+        opened_at: p.opened_at, closed_at: null,
+        reason: 'open', pnl: null, pnl_pct: null,
+        _open: true,
+      };
+    });
+    var allTrades = openTrades.concat(history || []);
+    countEl.textContent = allTrades.length + ' trade' + (allTrades.length !== 1 ? 's' : '');
+
+    if (allTrades.length === 0) {
       container.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><p>No trade history</p></div>';
       return;
     }
@@ -1922,35 +2225,48 @@
     let totalPnl = 0;
     let html = '<div class="table-wrapper"><table><thead><tr>' +
       '<th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th>' +
-      '<th>P&L ($)</th><th>P&L (%)</th><th>Reason</th><th>Closed At</th>' +
+      '<th>P&L ($)</th><th>P&L (%)</th><th>Status</th><th>Time</th>' +
       '</tr></thead><tbody>';
 
-    history.forEach(function(h) {
+    allTrades.forEach(function(h) {
+      const isOpen = h._open || false;
       const pnl = h.pnl || 0;
-      totalPnl += pnl;
+      if (!isOpen) totalPnl += pnl;
       const sideClass = (h.side && h.side.toLowerCase() === 'short') ? 'side-short' : 'side-long';
       const sideLabel = (h.side && h.side.toLowerCase() === 'short') ? 'SHORT' : 'LONG';
-      const closedAt = h.closed_at ? new Date(h.closed_at).toLocaleString('en-US', { timeZone: TZ,
-        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-      }) : '--';
 
-      html += '<tr>' +
+      var timeStr = '--';
+      if (isOpen && h.opened_at) {
+        timeStr = new Date(h.opened_at).toLocaleString('en-US', { timeZone: TZ,
+          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } else if (h.closed_at) {
+        timeStr = new Date(h.closed_at).toLocaleString('en-US', { timeZone: TZ,
+          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+
+      var statusHtml = isOpen
+        ? '<span style="color:var(--amber);">Holding</span>'
+        : escHtml(h.reason || 'closed');
+
+      html += '<tr' + (isOpen ? ' style="opacity:0.75;"' : '') + '>' +
         '<td><strong>' + escHtml(h.symbol) + '</strong></td>' +
         '<td class="' + sideClass + '">' + sideLabel + '</td>' +
         '<td class="mono">' + fmt(h.qty, isCrypto(h.symbol) ? 6 : 0) + '</td>' +
         '<td class="mono">' + fmtUsd(h.entry_price) + '</td>' +
-        '<td class="mono">' + fmtUsd(h.exit_price) + '</td>' +
-        '<td class="mono ' + pnlClass(pnl) + '">' + fmtUsd(pnl) + '</td>' +
-        '<td class="mono ' + pnlClass(h.pnl_pct) + '">' + fmtPct(h.pnl_pct) + '</td>' +
-        '<td>' + escHtml(h.reason || '') + '</td>' +
-        '<td class="mono" style="font-size:12px;">' + closedAt + '</td>' +
+        '<td class="mono">' + (isOpen ? '<span style="color:var(--text-tertiary);">--</span>' : fmtUsd(h.exit_price)) + '</td>' +
+        '<td class="mono ' + (isOpen ? '' : pnlClass(pnl)) + '">' + (isOpen ? '--' : fmtUsd(pnl)) + '</td>' +
+        '<td class="mono ' + (isOpen ? '' : pnlClass(h.pnl_pct)) + '">' + (isOpen ? '--' : fmtPct(h.pnl_pct)) + '</td>' +
+        '<td>' + statusHtml + '</td>' +
+        '<td class="mono" style="font-size:12px;">' + timeStr + '</td>' +
         '</tr>';
     });
 
-    html += '<tr class="totals-row">' +
-      '<td colspan="5" style="text-align:right;">Total Realized P&L</td>' +
-      '<td class="mono ' + pnlClass(totalPnl) + '">' + fmtUsd(totalPnl) + '</td>' +
-      '<td colspan="3"></td></tr>';
+    if (history && history.length > 0) {
+      html += '<tr class="totals-row">' +
+        '<td colspan="5" style="text-align:right;">Total Realized P&L</td>' +
+        '<td class="mono ' + pnlClass(totalPnl) + '">' + fmtUsd(totalPnl) + '</td>' +
+        '<td colspan="3"></td></tr>';
+    }
 
     html += '</tbody></table></div>';
     container.innerHTML = html;
@@ -2075,6 +2391,68 @@
     panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
 
+  window.autoBuildPortfolio = async function() {
+    if (!signals || signals.length === 0) {
+      showToast('No signals available. Run a scan first.', 'error');
+      return;
+    }
+
+    var topN = parseInt(document.getElementById('build-top-n').value) || 5;
+    var buySignals = signals.filter(function(s) { return s.action && s.action.toUpperCase() === 'BUY'; });
+
+    if (buySignals.length === 0) {
+      showToast('No BUY signals to build from.', 'error');
+      return;
+    }
+
+    // Count categories with buy signals
+    var catCounts = {};
+    buySignals.forEach(function(s) {
+      var cat = (s.symbol || '').includes('/') ? 'Crypto' : (s.symbol || '').endsWith('=F') ? 'Futures' : 'Stocks';
+      catCounts[cat] = (catCounts[cat] || 0) + 1;
+    });
+    var catSummary = Object.keys(catCounts).map(function(c) { return c + ' ' + catCounts[c]; }).join(', ');
+
+    var cash = portfolio ? portfolio.cash : 0;
+    var body = '<div style="display:flex;flex-direction:column;gap:10px;">' +
+      '<div><strong>Selection:</strong> Top ' + topN + ' from ' + buySignals.length + ' BUY signals</div>' +
+      '<div><strong>Strategy:</strong> Stratified — each asset class gets at least 1 slot, rest by confidence</div>' +
+      '<div><strong>Signal pool:</strong> ' + catSummary + '</div>' +
+      '<div><strong>Available cash:</strong> <span class="mono">' + fmtUsd(cash) + '</span></div>' +
+      '<div><strong>Sizing:</strong> Half-Kelly criterion (20% cash reserve)</div>' +
+    '</div>';
+
+    var ok = await showConfirm('Build Portfolio', body, { okText: 'Build Portfolio' });
+    if (!ok) return;
+
+    var btn = document.getElementById('auto-build-btn');
+    btn.disabled = true;
+    btn.textContent = 'Building...';
+
+    try {
+      var result = await apiPost('/api/auto-build', { top_n: topN });
+      var opened = result.positions_opened || [];
+      if (opened.length > 0) {
+        var summary = opened.map(function(p) {
+          return p.symbol + ' (' + p.allocation_pct + '%, ' + fmtUsd(p.cost) + ')';
+        }).join(', ');
+        showToast('Opened ' + opened.length + ' positions: ' + summary, 'success');
+      } else {
+        showToast('No positions opened. ' + (result.error || ''), 'error');
+      }
+      if (result.errors && result.errors.length > 0) {
+        var errMsg = result.errors.map(function(e) { return e.symbol + ': ' + e.error; }).join(', ');
+        showToast('Some errors: ' + errMsg, 'error');
+      }
+      refreshAll();
+    } catch (e) {
+      showToast('Auto build failed: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg> Auto Build';
+    }
+  };
+
   window.toggleHistory = function() {
     var container = document.getElementById('history-container');
     var toggle = document.getElementById('history-toggle');
@@ -2086,9 +2464,23 @@
 
   window.refreshAll = refreshAll;
 
+  // --- Confidence slider ---
+  (function() {
+    var slider = document.getElementById('confidence-filter');
+    slider.value = minConfidence;
+    document.getElementById('confidence-value').textContent = minConfidence + '%';
+    slider.addEventListener('input', function() {
+      minConfidence = parseInt(this.value) || 0;
+      sessionStorage.setItem('sf_minConf', minConfidence);
+      document.getElementById('confidence-value').textContent = this.value + '%';
+      renderSignals();
+    });
+  })();
+
   // --- Init ---
+  // Auto-refresh every 30s to pick up server-side price updates
   refreshAll();
-  refreshTimer = setInterval(refreshAll, 30000);
+  setInterval(function() { refreshAll(); }, 30000);
 
   // Resume progress panel if scan is running
   (async function _checkRunningScan() {

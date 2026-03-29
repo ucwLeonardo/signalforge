@@ -9,6 +9,9 @@ from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
 
+# Transaction fee rate (0.1% per trade, applied to both open and close)
+TRANSACTION_FEE_RATE = 0.001
+
 from signalforge.paper.models import (
     Portfolio,
     Position,
@@ -138,17 +141,19 @@ class PortfolioManager:
         stop_loss: float,
         target_price: float,
     ) -> Position:
-        """Open a new position. Deducts cost from cash."""
+        """Open a new position. Deducts cost + fee from cash."""
         portfolio = self.load()
         # Check for duplicate
         for p in portfolio.positions:
             if p.symbol == symbol:
                 raise ValueError(f"You already have an open position in {symbol}")
-        # Check cash
+        # Check cash (cost + fee)
         cost = qty * entry_price
-        if cost > portfolio.cash:
+        fee = cost * TRANSACTION_FEE_RATE
+        total_cost = cost + fee
+        if total_cost > portfolio.cash:
             raise ValueError(
-                f"Insufficient cash: need ${cost:.2f}, have ${portfolio.cash:.2f}"
+                f"Insufficient cash: need ${total_cost:.2f} (incl. ${fee:.2f} fee), have ${portfolio.cash:.2f}"
             )
         position = Position(
             symbol=symbol,
@@ -160,7 +165,7 @@ class PortfolioManager:
             target_price=target_price,
             opened_at=datetime.now(),
         )
-        portfolio.cash -= cost
+        portfolio.cash -= total_cost
         portfolio.positions.append(position)
         self._save(portfolio)
         return position
@@ -193,9 +198,10 @@ class PortfolioManager:
             closed_at=datetime.now(),
             reason=reason,
         )
-        # Add proceeds back to cash
+        # Add proceeds back to cash, minus exit fee
         proceeds = pos.qty * exit_price
-        portfolio.cash += proceeds
+        fee = proceeds * TRANSACTION_FEE_RATE
+        portfolio.cash += proceeds - fee
         portfolio.positions.pop(pos_idx)
         portfolio.trades.append(trade)
         self._save(portfolio)

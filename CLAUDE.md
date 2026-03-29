@@ -50,14 +50,23 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 
 ### Paper Trading
 - HTTP server (`paper/server.py`) serving single-file dashboard (`paper/dashboard.html`)
-- Multi-account with per-account asset categories (stored in portfolio JSON)
-- Auto-build: Half-Kelly criterion portfolio allocation
-- Signal filtering by account categories
+- Multi-account with per-account asset categories (stored in portfolio JSON, editable via modal)
+- **Auto Build**: Stratified selection (each asset class gets ≥1 slot) → Half-Kelly allocation → positions opened at real-time market price
+- **Signal Cache**: Per-account JSON persistence (`signal_cache.py`), survives server restart. Separate full/watchlist caches per account
+- **Price Fetching** (`prices.py`): Proxy-aware with auto-detection (env vars → Clash 7897/7890)
+  - Crypto fallback chain: CoinGecko (primary, no geo-block) → Binance → Polygon prev close
+  - Stocks/Futures: Polygon prev close, Options: Polygon snapshot
+  - 62 CoinGecko ID mappings for major crypto tokens
+- **Background Price Updater**: Server-side thread updates ALL accounts every 30s, frontend auto-refreshes in sync
+- **Price Status**: `/api/price-status` endpoint for monitoring update health
+- **Transaction Fees**: 0.1% per trade (open + close)
+- Signal filtering by account categories with confidence slider (sessionStorage-persisted)
 - **Scan UX**: Stop/Restart with immediate UI feedback, progress panel persists after stop
 - **Watchlist**: Edit config symbols via modal (`GET/POST /api/watchlist`), scan config-only with `config_only` param
 - **Scan All** vs **Watchlist Scan**: full discovery scan or config-symbols-only quick scan
 - Progress log: per-symbol stages (Discovery/Cached/Data/Skipped/Error) with category labels (Stock/Crypto/Futures)
 - Cancel-aware data fetching: 0.5s polling in IncrementalFetcher for responsive stop
+- Custom confirm modals (no native browser dialogs), collapsible positions panel with summary header
 
 ## Environment Variables
 - `MASSIVE_API_KEY` (required): Polygon/Massive API key for all market data

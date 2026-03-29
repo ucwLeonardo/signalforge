@@ -18,6 +18,7 @@ build/
 
 # Screenshots
 dashboard-*.png
+scan-*.png
 
 # Tool-generated context files
 **/CLAUDE.md

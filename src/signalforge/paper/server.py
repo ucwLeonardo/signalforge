@@ -20,19 +20,29 @@ from urllib.parse import urlparse, parse_qs
 
 from signalforge.paper.models import position_from_dict
 from signalforge.paper.portfolio import AccountManager, PortfolioManager
+from signalforge.paper.signal_cache import SignalCache
 from signalforge.paper.simulator import (
     auto_build_portfolio,
+    build_from_cached_signals,
     generate_real_signals,
 )
 
 import threading
 
-# Live prices cache — updated by browser via /api/update-prices
+# Live prices cache — updated by background thread for ALL accounts
 _live_prices: dict[str, float] = {}
+_PRICE_UPDATE_INTERVAL = 30  # seconds
+_price_status: dict[str, Any] = {
+    "last_update": None,
+    "symbols_updated": 0,
+    "accounts_updated": 0,
+    "last_error": None,
+    "source": None,
+}
 
-# Cached signals — only regenerated on explicit trigger (auto-build or manual scan)
-_cached_signals: list = []
 _scan_cancel: bool = False  # set to True to cancel running scan
+_scan_account: str = ""  # which account is currently scanning
+_scan_type: str = "full"  # "full" or "watchlist"
 _scan_progress: dict = {
     "running": False,
     "total": 0,
@@ -73,52 +83,84 @@ def _save_history(portfolio_path: Path, history: list[dict[str, Any]]) -> None:
 
 
 def _fetch_live_prices(symbols: list[str]) -> dict[str, float]:
-    """Fetch current prices for symbols via yfinance (stocks) and ccxt (crypto).
+    """Fetch current prices: Binance for crypto (real-time), Polygon for stocks.
 
-    This runs on the server (WSL2 with network) — not affected by sandbox.
+    Logs errors but does not crash the server — returns partial results.
     """
-    prices: dict[str, float] = {}
+    from signalforge.paper.prices import PriceFetchError, fetch_prices
 
-    stock_syms = [s for s in symbols if "/" not in s and not s.endswith("=F")]
-    crypto_syms = [s for s in symbols if "/" in s]
-    futures_syms = [s for s in symbols if s.endswith("=F")]
+    try:
+        return fetch_prices(symbols)
+    except PriceFetchError as exc:
+        sys.stderr.write(f"[Prices] {exc}\n")
+        return {}
+    except Exception as exc:
+        sys.stderr.write(f"[Prices] Unexpected error: {exc}\n")
+        return {}
 
-    # Stocks + Futures via yfinance
-    yf_syms = stock_syms + futures_syms
-    if yf_syms:
+
+def _background_price_updater(account_manager: AccountManager) -> None:
+    """Background thread: update prices for ALL accounts with open positions.
+
+    Runs every _PRICE_UPDATE_INTERVAL seconds. Collects all held symbols
+    across all accounts, fetches prices once, then updates each account.
+    """
+    import time
+
+    while True:
+        time.sleep(_PRICE_UPDATE_INTERVAL)
         try:
-            import yfinance as yf
-            tickers = yf.Tickers(" ".join(yf_syms))
-            for sym in yf_syms:
-                try:
-                    info = tickers.tickers[sym].fast_info
-                    price = info.get("lastPrice") or info.get("last_price")
-                    if price and price > 0:
-                        prices[sym] = float(price)
-                except Exception:
-                    pass
-        except Exception as exc:
-            sys.stderr.write(f"yfinance price fetch failed: {exc}\n")
+            names = account_manager.list_accounts()
+            if not names:
+                continue
 
-    # Crypto via ccxt
-    if crypto_syms:
-        try:
-            import ccxt
-            from signalforge.config import load_config
-            cfg = load_config()
-            exchange_id = cfg.data.crypto_exchange
-            exchange = getattr(ccxt, exchange_id)()
-            for sym in crypto_syms:
-                try:
-                    ticker = exchange.fetch_ticker(sym)
-                    if ticker and ticker.get("last"):
-                        prices[sym] = float(ticker["last"])
-                except Exception:
-                    pass
-        except Exception as exc:
-            sys.stderr.write(f"ccxt price fetch failed: {exc}\n")
+            # Collect all held symbols across all accounts
+            account_positions: dict[str, list[str]] = {}
+            all_symbols: set[str] = set()
+            for name in names:
+                mgr = account_manager.get_manager(name)
+                if not mgr.exists():
+                    continue
+                portfolio = mgr.load()
+                held = [p.symbol for p in portfolio.positions]
+                if held:
+                    account_positions[name] = held
+                    all_symbols.update(held)
 
-    return prices
+            if not all_symbols:
+                continue
+
+            # Fetch prices once for all symbols
+            prices = _fetch_live_prices(list(all_symbols))
+            if not prices:
+                continue
+
+            global _live_prices, _price_status
+            _live_prices.update(prices)
+
+            # Update each account's positions
+            updated_accounts = 0
+            for name, held in account_positions.items():
+                account_prices = {s: prices[s] for s in held if s in prices}
+                if account_prices:
+                    mgr = account_manager.get_manager(name)
+                    mgr.update_prices(account_prices)
+                    updated_accounts += 1
+
+            _price_status = {
+                "last_update": datetime.now().isoformat(),
+                "symbols_updated": len(prices),
+                "accounts_updated": updated_accounts,
+                "last_error": None,
+                "source": "coingecko+polygon",
+            }
+            sys.stderr.write(
+                f"[Prices] Updated {len(prices)} prices for {updated_accounts} accounts\n"
+            )
+        except Exception as exc:
+            _price_status["last_error"] = str(exc)
+            _price_status["last_update"] = datetime.now().isoformat()
+            sys.stderr.write(f"[Prices] Background update error: {exc}\n")
 
 
 def _append_snapshot(manager: PortfolioManager) -> None:
@@ -160,6 +202,11 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         account = (params or {}).get("account", "default")
         return self.__class__.account_manager.get_manager(account)
 
+    def _get_signal_cache(self, params: dict[str, str] | None = None) -> SignalCache:
+        """Get SignalCache for the requested account."""
+        manager = self._get_manager(params)
+        return SignalCache(manager.path.parent)
+
     def _set_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -196,11 +243,13 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         routes: dict[str, Any] = {
             "/api/portfolio": self._handle_portfolio,
             "/api/signals": self._handle_signals,
+            "/api/signals/meta": self._handle_signals_meta,
             "/api/history": self._handle_history,
-            "/api/prices": self._handle_prices_proxy,
+            # /api/prices removed — background thread updates all accounts
             "/api/accounts": self._handle_accounts_list,
             "/api/scan/status": self._handle_scan_status,
             "/api/watchlist": self._handle_watchlist_get,
+            "/api/price-status": self._handle_price_status,
         }
         handler = routes.get(route)
         if handler is not None:
@@ -220,10 +269,11 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "/api/open": self._handle_open,
             "/api/close": self._handle_close,
             "/api/update-stops": self._handle_update_stops,
-            "/api/update-prices": self._handle_update_prices,
+            # /api/update-prices removed — background thread handles this
             "/api/accounts/create": self._handle_account_create,
             "/api/accounts/reset": self._handle_account_reset,
             "/api/accounts/delete": self._handle_account_delete,
+            "/api/accounts/categories": self._handle_account_categories,
             "/api/auto-build": self._handle_auto_build,
             "/api/scan": self._handle_scan_start,
             "/api/scan/cancel": self._handle_scan_cancel,
@@ -248,7 +298,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         # Return data immediately — price updates happen via /api/update-prices
         portfolio = manager.load()
         _append_snapshot(manager)
-        history = _load_history(manager.path)
+        history = sorted(_load_history(manager.path), key=lambda h: h.get("timestamp", ""))
         self._send_json({
             "cash": round(portfolio.cash, 2),
             "initial_balance": round(portfolio.initial_balance, 2),
@@ -274,9 +324,21 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         return "us_stocks"
 
     def _handle_signals(self, params: dict[str, str]) -> None:
-        """Return cached signals, filtered by account's asset_categories."""
-        global _cached_signals
-        # Load account's allowed categories
+        """Return cached signals for this account.
+
+        Query params:
+          - scan_type: "full" or "watchlist" (default: "watchlist" if exists, else "full")
+        """
+        cache = self._get_signal_cache(params)
+
+        # Prefer watchlist cache, fall back to full
+        scan_type = params.get("scan_type", "")
+        if scan_type:
+            signals = cache.load(scan_type)
+        else:
+            signals = cache.load("watchlist") or cache.load("full")
+
+        # Filter by account's allowed categories
         manager = self._get_manager(params)
         allowed_categories: set[str] | None = None
         if manager.exists():
@@ -295,9 +357,17 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 "horizon_days": s.horizon_days,
                 "rationale": s.rationale,
             }
-            for s in _cached_signals
+            for s in signals
             if allowed_categories is None or self._classify_symbol(s.symbol) in allowed_categories
         ])
+
+    def _handle_signals_meta(self, params: dict[str, str]) -> None:
+        """Return signal cache metadata for this account (timestamps, counts)."""
+        cache = self._get_signal_cache(params)
+        self._send_json({
+            "full": cache.metadata("full"),
+            "watchlist": cache.metadata("watchlist"),
+        })
 
     def _handle_history(self, params: dict[str, str]) -> None:
         manager = self._get_manager(params)
@@ -310,25 +380,17 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         self._send_json([t.to_dict() for t in portfolio.trades])
 
     def _handle_prices_proxy(self, params: dict[str, str]) -> None:
-        """Fetch current prices for held positions via yfinance/ccxt."""
+        """Return cached live prices. Background thread keeps them updated."""
         manager = self._get_manager(params)
         if not manager.exists():
             self._send_json({"prices": {}})
             return
 
         portfolio = manager.load()
-        held = [p.symbol for p in portfolio.positions]
-        if not held:
-            self._send_json({"prices": dict(_live_prices)})
-            return
-
-        # Fetch real prices for held symbols
-        prices = _fetch_live_prices(held)
-        if prices:
-            _live_prices.update(prices)
-            manager.update_prices(prices)
-
-        self._send_json({"prices": dict(_live_prices)})
+        held = {p.symbol for p in portfolio.positions}
+        # Return only prices relevant to this account's positions
+        account_prices = {s: p for s, p in _live_prices.items() if s in held}
+        self._send_json({"prices": account_prices})
 
     def _handle_accounts_list(self, params: dict[str, str]) -> None:
         """List all accounts with summaries."""
@@ -341,6 +403,10 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             except Exception:
                 accounts.append({"name": name, "error": "failed to load"})
         self._send_json({"accounts": accounts})
+
+    def _handle_price_status(self, params: dict[str, str]) -> None:
+        """Return background price updater status."""
+        self._send_json(_price_status)
 
     # -- POST handlers --------------------------------------------------
 
@@ -543,12 +609,42 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
+    def _handle_account_categories(self, params: dict[str, str]) -> None:
+        """Update asset categories for an account. Body: {categories: [...]}"""
+        manager = self._get_manager(params)
+        try:
+            self._ensure_portfolio(manager)
+        except ValueError as exc:
+            self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
+            return
+        try:
+            body = self._read_body()
+            categories = body.get("categories")
+            if not categories or not isinstance(categories, list):
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "Provide {categories: [\"us_stocks\", \"crypto\", ...]}",
+                )
+                return
+            valid = {"us_stocks", "crypto", "futures", "options"}
+            categories = [c for c in categories if c in valid]
+            if not categories:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "At least one valid category required")
+                return
+            portfolio = manager.load()
+            portfolio.asset_categories = categories
+            manager._save(portfolio)
+            self._send_json({"categories": categories})
+        except (json.JSONDecodeError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
     # -- scan & auto-build endpoints -------------------------------------
 
     def _handle_scan_start(self, params: dict[str, str]) -> None:
         """Start pipeline scan in background thread. Poll /api/scan/status for progress.
 
-        Body: {categories: ["us_stocks", "crypto"]}
+        Body: {categories: ["us_stocks", "crypto"], config_only: bool}
+        Signals are persisted per-account as full or watchlist cache.
         """
         global _scan_progress
         if _scan_progress["running"]:
@@ -561,9 +657,16 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             body = self._read_body()
             categories = body.get("categories", ["us_stocks", "crypto"])
             config_only = body.get("config_only", False)
+            scan_type = "watchlist" if config_only else "full"
 
-            global _scan_cancel
+            # Capture the account's signal cache for the background thread
+            cache = self._get_signal_cache(params)
+            account = (params or {}).get("account", "default")
+
+            global _scan_cancel, _scan_account, _scan_type
             _scan_cancel = False
+            _scan_account = account
+            _scan_type = scan_type
             _scan_progress = {
                 "running": True, "total": 0, "completed": 0,
                 "symbol": "", "stage": "starting", "detail": "Initializing pipeline...",
@@ -582,17 +685,21 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 })
 
             def _run_scan() -> None:
-                global _cached_signals, _scan_progress, _scan_cancel
+                global _scan_progress, _scan_cancel
                 try:
-                    sys.stderr.write(f"[Scan] Background scan started: {categories}\n")
+                    sys.stderr.write(f"[Scan] Background scan started: {categories} ({scan_type}) for account={account}\n")
                     signals = generate_real_signals(
                         categories=categories,
                         progress_cb=_on_progress,
                         cancel_flag=lambda: _scan_cancel,
                         config_only=config_only,
                     )
+                    # Persist to disk even if partially cancelled
+                    if signals:
+                        cache.save(signals, scan_type)
+                        sys.stderr.write(f"[Scan] Saved {len(signals)} signals to {scan_type} cache for account={account}\n")
+
                     if _scan_cancel:
-                        _cached_signals = signals if signals else _cached_signals
                         completed = _scan_progress.get("completed", 0)
                         total = _scan_progress.get("total", 0)
                         _scan_progress = {
@@ -604,7 +711,6 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                         }
                         sys.stderr.write(f"[Scan] Cancelled: {len(signals)} signals\n")
                     else:
-                        _cached_signals = signals
                         _scan_progress = {
                             "running": False, "total": _scan_progress.get("total", 0),
                             "completed": _scan_progress.get("total", 0),
@@ -623,13 +729,19 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
 
             thread = threading.Thread(target=_run_scan, daemon=True)
             thread.start()
-            self._send_json({"status": "started", "categories": categories})
+            self._send_json({"status": "started", "categories": categories, "scan_type": scan_type})
         except (json.JSONDecodeError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
     def _handle_scan_status(self, params: dict[str, str]) -> None:
         """Return detailed scan progress with log history."""
         log = _scan_progress.get("log", [])
+        # Get cached signal count from account's cache when scan is not running
+        count = None
+        if not _scan_progress["running"]:
+            cache = self._get_signal_cache(params)
+            signals = cache.load("watchlist") or cache.load("full")
+            count = len(signals)
         self._send_json({
             "running": _scan_progress["running"],
             "total": _scan_progress.get("total", 0),
@@ -638,7 +750,9 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "stage": _scan_progress.get("stage", ""),
             "detail": _scan_progress.get("detail", ""),
             "error": _scan_progress.get("error"),
-            "count": len(_cached_signals) if not _scan_progress["running"] else None,
+            "count": count,
+            "scan_account": _scan_account,
+            "scan_type": _scan_type,
             "log": log,
         })
 
@@ -704,11 +818,13 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         self._send_json({"status": "saved", "path": str(config_path)})
 
     def _handle_auto_build(self, params: dict[str, str]) -> None:
-        """Auto-build portfolio: run pipeline → top N → Kelly allocation → open positions.
+        """Auto-build portfolio from cached scan signals.
 
-        Body: {categories: ["us_stocks", "crypto"], top_n?: 5}
+        Uses persisted signals from the last scan — no re-scanning.
+        Selects top N by confidence, allocates via half-Kelly, opens positions.
+
+        Body: {top_n?: 5, scan_type?: "watchlist"|"full"}
         """
-        global _cached_signals
         manager = self._get_manager(params)
         try:
             self._ensure_portfolio(manager)
@@ -717,18 +833,33 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             return
         try:
             body = self._read_body()
-            categories = body.get("categories", ["us_stocks", "crypto"])
             top_n = int(body.get("top_n", 5))
+            scan_type = body.get("scan_type", "")
 
-            result = auto_build_portfolio(
+            # Load from per-account cache
+            cache = self._get_signal_cache(params)
+            if scan_type:
+                cached_signals = cache.load(scan_type)
+            else:
+                cached_signals = cache.load("watchlist") or cache.load("full")
+
+            if not cached_signals:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST,
+                    "No cached signals. Run a scan first.",
+                )
+                return
+
+            # Use account's asset categories for filtering
+            portfolio = manager.load()
+            categories = portfolio.asset_categories or ["us_stocks", "crypto"]
+
+            result = build_from_cached_signals(
                 manager=manager,
+                cached_signals=cached_signals,
                 categories=categories,
                 top_n=top_n,
             )
-
-            # Cache the signals generated during auto-build for the signals endpoint
-            if "all_signals" in result:
-                _cached_signals = result.pop("all_signals")
 
             if "error" in result and not result.get("positions_opened"):
                 self._send_error_json(HTTPStatus.BAD_REQUEST, result["error"])
@@ -750,6 +881,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         body = dashboard_file.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self._set_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -818,9 +950,17 @@ def main(argv: list[str] | None = None) -> None:
 
     server = ThreadedHTTPServer(("0.0.0.0", args.port), PaperTradingHandler)
     accounts = am.list_accounts()
+
+    # Start background price updater for ALL accounts
+    price_thread = threading.Thread(
+        target=_background_price_updater, args=(am,), daemon=True
+    )
+    price_thread.start()
+
     print(f"Paper trading server running on http://localhost:{args.port}")
     print(f"Accounts: {', '.join(accounts) if accounts else '(none yet, will auto-create default)'}")
     print(f"Dashboard: http://localhost:{args.port}/")
+    print(f"Background price updates: every {_PRICE_UPDATE_INTERVAL}s for all accounts")
     print("Press Ctrl+C to stop.")
 
     try:

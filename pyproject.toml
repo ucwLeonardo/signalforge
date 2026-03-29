@@ -70,6 +70,12 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "browser: Playwright browser tests (require playwright install + running server)",
+]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true

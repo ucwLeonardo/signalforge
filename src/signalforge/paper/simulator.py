@@ -8,6 +8,28 @@ import sys
 from signalforge.data.models import TradeAction, TradeTarget
 
 
+def _fetch_live_prices_for_build(symbols: list[str]) -> dict[str, float]:
+    """Fetch current market prices at build time for accurate entry pricing.
+
+    Raises PriceFetchError for unsupported asset types (e.g. options).
+    Logs warnings for individual fetch failures but continues.
+    """
+    from signalforge.paper.prices import fetch_prices
+
+    prices = fetch_prices(symbols)
+    missing = [s for s in symbols if s not in prices]
+    if missing:
+        sys.stderr.write(
+            f"[Build] WARNING: No live price for {', '.join(missing)} — "
+            "will fall back to signal entry_price\n"
+        )
+    else:
+        sys.stderr.write(
+            f"[Build] Fetched live prices for all {len(prices)} symbols\n"
+        )
+    return prices
+
+
 def _get_config_symbols(
     categories: list[str],
     config: "Config",
@@ -147,7 +169,6 @@ def _kelly_allocate(
     signals: list[TradeTarget],
     total_budget_pct: float = 80.0,
     max_single_pct: float = 30.0,
-    short_budget_pct: float = 10.0,
 ) -> dict[str, float]:
     """Allocate using a half-Kelly criterion based on signal confidence and R:R.
 
@@ -160,39 +181,181 @@ def _kelly_allocate(
     We use half-Kelly (f/2) for conservatism, then normalize so total
     allocation = total_budget_pct (default 80%, keeping 20% cash reserve).
 
-    BUY signals share the main budget; SELL signals get a smaller short budget.
+    Both BUY and SELL signals share the same Kelly-weighted pool.
     Each position is capped at max_single_pct.
+    """
+    if not signals:
+        return {}
+
+    kelly_scores: dict[str, float] = {}
+    for s in signals:
+        rr = max(s.risk_reward_ratio, 0.01)
+        # Kelly: f = p * (b-1)/b  where p=confidence, b=rr_ratio
+        # For b>1 (favorable R:R), f is positive
+        f = s.confidence * (rr - 1) / rr if rr > 1 else s.confidence * 0.1
+        kelly_scores[s.symbol] = max(f / 2, 0.01)  # half-Kelly, floor at 1%
+
+    total_score = sum(kelly_scores.values())
+    alloc: dict[str, float] = {}
+    for sym, score in kelly_scores.items():
+        pct = (score / total_score) * total_budget_pct
+        alloc[sym] = round(min(pct, max_single_pct), 1)
+
+    return alloc
+
+
+def _stratified_select(
+    signals: list[TradeTarget],
+    categories: list[str],
+    top_n: int = 5,
+) -> list[TradeTarget]:
+    """Select top N signals with cross-asset diversification.
+
+    Strategy (stratified selection):
+      1. Group BUY signals by asset category.
+      2. Guarantee each category at least 1 slot (if it has signals).
+      3. Remaining slots go to the highest-confidence signals globally.
+      4. SELL signals are appended after (they use a separate short budget).
+
+    This ensures the portfolio isn't concentrated in one asset class
+    while still prioritising the strongest signals.
     """
     buy_signals = [s for s in signals if s.action == TradeAction.BUY]
     sell_signals = [s for s in signals if s.action == TradeAction.SELL]
 
-    if not buy_signals and not sell_signals:
-        return {}
+    # Group buys by category
+    by_cat: dict[str, list[TradeTarget]] = {}
+    for s in buy_signals:
+        cat = _classify_symbol_category(s.symbol)
+        by_cat.setdefault(cat, []).append(s)
 
-    alloc: dict[str, float] = {}
+    # Each list is already sorted by confidence desc (from scan)
+    selected: list[TradeTarget] = []
+    seen: set[str] = set()
 
-    # --- BUY allocation via half-Kelly ---
-    if buy_signals:
-        kelly_scores: dict[str, float] = {}
+    # Phase 1: one best signal per category (guaranteed diversity)
+    for cat in categories:
+        if cat in by_cat and by_cat[cat]:
+            best = by_cat[cat][0]
+            selected.append(best)
+            seen.add(best.symbol)
+
+    # Phase 2: fill remaining slots from global ranking
+    remaining = top_n - len(selected)
+    if remaining > 0:
         for s in buy_signals:
-            rr = max(s.risk_reward_ratio, 0.01)
-            # Kelly: f = p * (b-1)/b  where p=confidence, b=rr_ratio
-            # For b>1 (favorable R:R), f is positive
-            f = s.confidence * (rr - 1) / rr if rr > 1 else s.confidence * 0.1
-            kelly_scores[s.symbol] = max(f / 2, 0.01)  # half-Kelly, floor at 1%
+            if s.symbol not in seen:
+                selected.append(s)
+                seen.add(s.symbol)
+                remaining -= 1
+                if remaining <= 0:
+                    break
 
-        total_score = sum(kelly_scores.values())
-        for sym, score in kelly_scores.items():
-            pct = (score / total_score) * total_budget_pct
-            alloc[sym] = round(min(pct, max_single_pct), 1)
+    # Append sell signals (separate short budget, don't count toward top_n)
+    for s in sell_signals:
+        if s.symbol not in seen:
+            selected.append(s)
+            seen.add(s.symbol)
 
-    # --- SELL allocation (small fixed budget) ---
-    if sell_signals:
-        per_short = short_budget_pct / len(sell_signals)
-        for s in sell_signals:
-            alloc[s.symbol] = round(min(per_short, 10.0), 1)
+    return selected
 
-    return alloc
+
+def build_from_cached_signals(
+    manager: "PortfolioManager",
+    cached_signals: list[TradeTarget],
+    categories: list[str],
+    top_n: int = 5,
+) -> dict:
+    """Build portfolio from pre-scanned signals — no re-scanning needed.
+
+    Uses stratified selection for cross-asset diversification,
+    then allocates via half-Kelly criterion.
+
+    Returns a summary dict including allocation preview and opened positions.
+    """
+    from signalforge.paper.portfolio import PortfolioManager
+
+    portfolio = manager.load()
+    balance = portfolio.cash
+
+    # Filter by account categories
+    filtered = filter_signals_by_categories(cached_signals, categories)
+    if not filtered:
+        return {"error": "No signals match account categories", "positions_opened": []}
+
+    # Stratified selection: diversify across categories, then fill by confidence
+    signals = _stratified_select(filtered, categories, top_n)
+
+    # Allocate via half-Kelly
+    allocation = _kelly_allocate(signals)
+    if not allocation:
+        return {"error": "Could not determine allocation", "positions_opened": []}
+
+    # Fetch real-time prices for selected symbols (market order simulation)
+    live_prices = _fetch_live_prices_for_build([s.symbol for s in signals])
+
+    # Open positions using real-time prices (not stale signal entry_price)
+    opened = []
+    errors = []
+    for signal in signals:
+        pct = allocation.get(signal.symbol)
+        if not pct or pct <= 0:
+            continue
+
+        # Use live price if available, fall back to signal entry_price
+        entry = live_prices.get(signal.symbol, signal.entry_price)
+        if entry <= 0:
+            continue
+
+        amount = balance * (pct / 100)
+        raw_qty = amount / entry
+        is_crypto = "/" in signal.symbol
+        qty = round(raw_qty, 6) if is_crypto else int(raw_qty)
+        if qty <= 0:
+            continue
+
+        side = "short" if signal.action == TradeAction.SELL else "long"
+        try:
+            pos = manager.open_position(
+                symbol=signal.symbol,
+                side=side,
+                qty=qty,
+                entry_price=entry,
+                stop_loss=signal.stop_loss,
+                target_price=signal.target_price,
+            )
+            opened.append({
+                "symbol": pos.symbol,
+                "side": side,
+                "qty": pos.qty,
+                "entry_price": entry,
+                "signal_entry": signal.entry_price,
+                "allocation_pct": pct,
+                "cost": round(qty * entry, 2),
+            })
+        except ValueError as exc:
+            errors.append({"symbol": signal.symbol, "error": str(exc)})
+
+    portfolio = manager.load()
+
+    # Category breakdown of selected signals
+    cat_breakdown: dict[str, int] = {}
+    for s in signals:
+        cat = _classify_symbol_category(s.symbol)
+        cat_breakdown[cat] = cat_breakdown.get(cat, 0) + 1
+
+    return {
+        "allocation_method": "half_kelly",
+        "selection_method": "stratified",
+        "allocation": allocation,
+        "positions_opened": opened,
+        "errors": errors,
+        "signals_considered": len(filtered),
+        "signals_selected": len(signals),
+        "category_breakdown": cat_breakdown,
+        "cash_remaining": round(portfolio.cash, 2),
+        "total_value": round(portfolio.total_value, 2),
+    }
 
 
 def auto_build_portfolio(
