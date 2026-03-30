@@ -357,7 +357,10 @@ def _get_polygon_provider():
     return _polygon_provider
 
 
-def _fetch_polygon_prices(symbols: list[str]) -> dict[str, float]:
+def _fetch_polygon_prices(
+    symbols: list[str],
+    on_price: "Callable[[dict[str, float]], None] | None" = None,
+) -> dict[str, float]:
     """Fetch previous close from Polygon for stock/futures symbols."""
     if not symbols:
         return {}
@@ -383,7 +386,10 @@ def _fetch_polygon_prices(symbols: list[str]) -> dict[str, float]:
             data = resp.json()
             results = data.get("results", [])
             if results:
-                prices[sym] = float(results[0]["c"])
+                price = float(results[0]["c"])
+                prices[sym] = price
+                if on_price is not None:
+                    on_price({sym: price})
             else:
                 errors.append(f"{sym}: Polygon returned no results for {ticker}")
         except requests.RequestException as exc:
@@ -412,7 +418,10 @@ def _to_polygon_option_ticker(symbol: str) -> str:
     return f"O:{contract.occ_symbol}"
 
 
-def _fetch_polygon_option_prices(symbols: list[str]) -> dict[str, float]:
+def _fetch_polygon_option_prices(
+    symbols: list[str],
+    on_price: "Callable[[dict[str, float]], None] | None" = None,
+) -> dict[str, float]:
     """Fetch option prices from Polygon snapshot API.
 
     Uses /v3/snapshot/options/{underlying} filtered by contract,
@@ -462,6 +471,8 @@ def _fetch_polygon_option_prices(symbols: list[str]) -> dict[str, float]:
                         price = float(day["close"])
                 if price and price > 0:
                     prices[sym] = price
+                    if on_price is not None:
+                        on_price({sym: price})
                 else:
                     errors.append(f"{sym}: Polygon snapshot returned no usable price for {ticker}")
             else:
@@ -484,7 +495,10 @@ def _fetch_polygon_option_prices(symbols: list[str]) -> dict[str, float]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch_prices(symbols: list[str]) -> dict[str, float]:
+def fetch_prices(
+    symbols: list[str],
+    progress_cb: "Callable[[int, int], None] | None" = None,
+) -> dict[str, float]:
     """Fetch current prices for a list of symbols.
 
     Routes each symbol to the correct source with fallback chain:
@@ -493,10 +507,18 @@ def fetch_prices(symbols: list[str]) -> dict[str, float]:
       - Futures (ends with '=F'): Polygon via ETF proxy
       - Options: Polygon snapshot
 
+    Parameters
+    ----------
+    progress_cb:
+        Optional callback(fetched_count, total_count) called as prices arrive.
+
     Logs warnings for individual failures but returns what it can.
     """
     if not symbols:
         return {}
+
+    import concurrent.futures
+    import threading
 
     crypto_syms: list[str] = []
     stock_syms: list[str] = []  # includes futures
@@ -512,51 +534,65 @@ def fetch_prices(symbols: list[str]) -> dict[str, float]:
             option_syms.append(sym)
 
     prices: dict[str, float] = {}
+    total_count = len(symbols)
+    _lock = threading.Lock()
 
-    # Fetch crypto and stock/option prices in parallel
-    import concurrent.futures
+    def _merge_and_notify(batch: dict[str, float]) -> None:
+        """Thread-safe merge of a batch of prices and progress notification."""
+        if not batch:
+            return
+        with _lock:
+            prices.update(batch)
+            fetched = len(prices)
+        if progress_cb is not None:
+            progress_cb(fetched, total_count)
 
-    def _fetch_crypto_chain() -> dict[str, float]:
+    def _fetch_crypto_chain() -> None:
         """CoinGecko → Binance → Polygon fallback chain."""
-        result: dict[str, float] = {}
         if not crypto_syms:
-            return result
+            return
         cg_prices = _fetch_coingecko_prices(crypto_syms)
-        result.update(cg_prices)
+        _merge_and_notify(cg_prices)
 
-        missing = [s for s in crypto_syms if s not in result]
+        with _lock:
+            got = set(prices.keys())
+        missing = [s for s in crypto_syms if s not in got]
         if missing:
             sys.stderr.write(
                 f"[Prices] CoinGecko missed {len(missing)}, trying Binance...\n"
             )
-            result.update(_fetch_binance_prices(missing))
+            bn_prices = _fetch_binance_prices(missing)
+            _merge_and_notify(bn_prices)
 
-        missing = [s for s in crypto_syms if s not in result]
+        with _lock:
+            got = set(prices.keys())
+        missing = [s for s in crypto_syms if s not in got]
         if missing:
             sys.stderr.write(
                 f"[Prices] Binance missed {len(missing)}, trying Polygon...\n"
             )
-            result.update(_fetch_polygon_crypto_prices(missing))
-        return result
+            pg_prices = _fetch_polygon_crypto_prices(missing)
+            _merge_and_notify(pg_prices)
 
-    def _fetch_stock_prices() -> dict[str, float]:
+    def _fetch_stock_prices() -> None:
         if not stock_syms:
-            return {}
-        return _fetch_polygon_prices(stock_syms)
+            return
+        _fetch_polygon_prices(stock_syms, on_price=_merge_and_notify)
 
-    def _fetch_option_prices() -> dict[str, float]:
+    def _fetch_option_prices() -> None:
         if not option_syms:
-            return {}
-        return _fetch_polygon_option_prices(option_syms)
+            return
+        _fetch_polygon_option_prices(option_syms, on_price=_merge_and_notify)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-        crypto_fut = pool.submit(_fetch_crypto_chain)
-        stock_fut = pool.submit(_fetch_stock_prices)
-        option_fut = pool.submit(_fetch_option_prices)
-
-        for fut in concurrent.futures.as_completed([crypto_fut, stock_fut, option_fut]):
+        futs = [
+            pool.submit(_fetch_crypto_chain),
+            pool.submit(_fetch_stock_prices),
+            pool.submit(_fetch_option_prices),
+        ]
+        for fut in concurrent.futures.as_completed(futs):
             try:
-                prices.update(fut.result())
+                fut.result()
             except Exception as exc:
                 sys.stderr.write(f"[Prices] Parallel fetch error: {exc}\n")
 

@@ -269,9 +269,17 @@ def run_pipeline(
     if symbol_data:
         _report(total, "", "prices", f"Fetching live prices for {ready_count} assets...",
                 phase_pct=_phase1_weight)
+
+        def _on_price_progress(fetched: int, price_total: int) -> None:
+            pct = _phase1_weight + (fetched / max(price_total, 1)) * _phase15_weight
+            _report(total, "", "prices",
+                    f"Live prices: {fetched}/{price_total} fetched...",
+                    phase_pct=pct)
+
         try:
             from signalforge.paper.prices import fetch_prices
-            live_prices = fetch_prices(list(symbol_data.keys()))
+            live_prices = fetch_prices(list(symbol_data.keys()),
+                                       progress_cb=_on_price_progress)
             logger.info(f"Live prices fetched: {len(live_prices)}/{ready_count}")
         except Exception as e:
             logger.warning(f"Live price fetch failed, using bar close: {e}")

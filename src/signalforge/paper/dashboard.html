@@ -1611,15 +1611,24 @@
   var _scanLogEntries = [];
   function _syncServerLog(serverLog) {
     if (serverLog.length <= _syncedLogCount) return;
-    var stageNames = {discovery:'Discovery',data:'Fetching',data_cached:'Cached',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Error',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',cancelled:'Stopped',error:'Error'};
-    var stageColors = {discovery:'var(--text-secondary)',data:'var(--blue)',data_cached:'var(--text-tertiary)',data_done:'var(--blue)',data_skipped:'var(--amber)',data_error:'var(--red)',lstm:'var(--purple)',gbm:'var(--amber)',technical:'var(--green)',agents:'var(--red)',ensemble:'var(--text-secondary)',done:'var(--green)',complete:'var(--green)',cancelled:'var(--red)',error:'var(--red)'};
+    var stageNames = {discovery:'Discovery',data:'Fetching',data_cached:'Cached',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Error',prices:'Live Prices',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',cancelled:'Stopped',error:'Error'};
+    var stageColors = {discovery:'var(--text-secondary)',data:'var(--blue)',data_cached:'var(--text-tertiary)',data_done:'var(--blue)',data_skipped:'var(--amber)',data_error:'var(--red)',prices:'var(--blue)',lstm:'var(--purple)',gbm:'var(--amber)',technical:'var(--green)',agents:'var(--red)',ensemble:'var(--text-secondary)',done:'var(--green)',complete:'var(--green)',cancelled:'var(--red)',error:'var(--red)'};
     var newEntries = serverLog.slice(_syncedLogCount);
     newEntries.forEach(function(e) {
       var detail = e.detail || '';
       var stage = e.stage || '';
-      // Only per-symbol data-fetching lines are replaceable (not phase summaries)
-      var isFetching = stage === 'data' && !!e.symbol;
+      // Replaceable lines: per-symbol data-fetching and incremental price progress
+      var isFetching = (stage === 'data' && !!e.symbol) || stage === 'prices';
 
+      // Price progress lines replace previous price progress lines
+      if (stage === 'prices') {
+        for (var i = _scanLogEntries.length - 1; i >= 0; i--) {
+          if (_scanLogEntries[i].replaceable && _scanLogEntries[i].stage === 'prices') {
+            _scanLogEntries.splice(i, 1);
+            break;
+          }
+        }
+      }
       // Any result line for the same symbol replaces its "Fetching..." line
       if (!isFetching && e.symbol) {
         for (var i = _scanLogEntries.length - 1; i >= 0; i--) {
