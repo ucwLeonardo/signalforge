@@ -10,19 +10,19 @@ build/
 
 .venv/
 .coverage
-.claude/
+.claude/*
+!.claude/rules/
+!.claude/skills/
+!.claude/settings.json
 .playwright-mcp/
 .serena/
 .idea/
 .vscode/
 
 # Screenshots
-dashboard-*.png
-scan-*.png
+*.png
 
 # Tool-generated context files
-**/CLAUDE.md
-!CLAUDE.md
 
 # IDE / editor
 .idea/

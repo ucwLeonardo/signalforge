@@ -42,6 +42,18 @@ class TradingParams:
     max_stop_pct: float = 0.08        # 8%
     min_target_pct: float = 0.02      # 2%
     max_target_pct: float = 0.12      # 12%
+    # Transaction fee: percentage of trade value (e.g. 0.001 = 0.1%)
+    fee_rate: float = 0.0
+    # Transaction fee: fixed amount per unit/contract (e.g. $1.25/contract for futures)
+    fee_per_unit: float = 0.0
+    # Minimum fee per order
+    min_fee: float = 0.0
+
+    def calculate_fee(self, qty: float, price: float) -> float:
+        """Calculate transaction fee for a trade. fee = max(rate*value + per_unit*qty, min_fee)."""
+        value = abs(qty * price)
+        fee = value * self.fee_rate + abs(qty) * self.fee_per_unit
+        return max(fee, self.min_fee)
 
 
 # Pre-built parameter sets per asset class
@@ -53,6 +65,10 @@ STOCK_TRADING_PARAMS = TradingParams(
     max_stop_pct=0.08,
     min_target_pct=0.02,
     max_target_pct=0.12,
+    # US stocks: zero commission (Schwab/Fidelity/IBKR Lite era)
+    fee_rate=0.0,
+    fee_per_unit=0.0,
+    min_fee=0.0,
 )
 
 CRYPTO_TRADING_PARAMS = TradingParams(
@@ -63,6 +79,10 @@ CRYPTO_TRADING_PARAMS = TradingParams(
     max_stop_pct=0.15,
     min_target_pct=0.04,
     max_target_pct=0.25,
+    # Binance spot taker fee
+    fee_rate=0.001,
+    fee_per_unit=0.0,
+    min_fee=0.0,
 )
 
 FUTURES_TRADING_PARAMS = TradingParams(
@@ -73,6 +93,10 @@ FUTURES_TRADING_PARAMS = TradingParams(
     max_stop_pct=0.08,
     min_target_pct=0.02,
     max_target_pct=0.12,
+    # CME micro futures: ~$1.25/contract (IBKR-like)
+    fee_rate=0.0,
+    fee_per_unit=1.25,
+    min_fee=0.0,
 )
 
 

@@ -336,10 +336,11 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         portfolio = manager.load()
         _append_snapshot(manager)
         history = sorted(_load_history(manager.path), key=lambda h: h.get("timestamp", ""))
-        # Estimate total fees: opening fees already paid + projected closing fees
-        from signalforge.paper.portfolio import TRANSACTION_FEE_RATE
-        open_fees = sum(p.cost_basis * TRANSACTION_FEE_RATE for p in portfolio.positions)
-        close_fees = sum(p.market_value * TRANSACTION_FEE_RATE for p in portfolio.positions)
+        # Fees: open_fees from actual recorded values; close_fees estimated per asset type
+        from signalforge.paper.portfolio import _fee_for_symbol
+        open_fees = sum(p.open_fee for p in portfolio.positions)
+        close_fees = sum(_fee_for_symbol(p.symbol, p.qty, p.current_price)
+                         for p in portfolio.positions)
         total_fees = round(open_fees + close_fees, 2)
 
         self._send_json({
@@ -352,6 +353,8 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "realized_pnl": round(portfolio.realized_pnl, 2),
             "unrealized_pnl": round(portfolio.unrealized_pnl, 2),
             "total_fees": total_fees,
+            "open_fees": round(open_fees, 2),
+            "close_fees": round(close_fees, 2),
             "positions": [p.to_dict() for p in portfolio.positions],
             "created_at": portfolio.created_at.isoformat(),
             "asset_categories": portfolio.asset_categories,

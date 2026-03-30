@@ -18,6 +18,7 @@ class Position:
     stop_loss: float
     target_price: float
     opened_at: datetime
+    open_fee: float = 0.0  # actual fee paid when opening
 
     @property
     def unrealized_pnl(self) -> float:
@@ -52,6 +53,7 @@ class Position:
             "stop_loss": self.stop_loss,
             "target_price": self.target_price,
             "opened_at": self.opened_at.isoformat(),
+            "open_fee": round(self.open_fee, 4),
             "unrealized_pnl": round(self.unrealized_pnl, 2),
             "market_value": round(self.market_value, 2),
             "pnl_pct": round(self.pnl_pct, 2),
@@ -147,6 +149,7 @@ def position_from_dict(d: dict) -> Position:
         stop_loss=d["stop_loss"],
         target_price=d["target_price"],
         opened_at=datetime.fromisoformat(d["opened_at"]),
+        open_fee=d.get("open_fee", 0.0),
     )
 
 

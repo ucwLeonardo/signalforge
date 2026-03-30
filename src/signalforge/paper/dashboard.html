@@ -977,8 +977,12 @@
         <span class="ss-value" id="s-positions-count">0</span>
       </div>
       <div class="ss-stat">
-        <span class="ss-label">Est. Fees</span>
-        <span class="ss-value negative" id="s-total-fees" title="Opening fees (paid) + projected closing fees">--</span>
+        <span class="ss-label">Open Fees</span>
+        <span class="ss-value negative" id="s-open-fees" title="Fees paid when opening positions">--</span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">Est. Close</span>
+        <span class="ss-value negative" id="s-close-fees" title="Projected fees for closing positions">--</span>
       </div>
     </div>
     <div id="s-unrealized-pnl" style="display:none">--</div>
@@ -1389,6 +1393,29 @@
 
   function isCrypto(symbol) {
     return symbol && symbol.indexOf('/') !== -1;
+  }
+
+  function isFutures(symbol) {
+    return symbol && symbol.indexOf('=F') !== -1;
+  }
+
+  // Build external URL for a symbol (Binance for crypto, Yahoo Finance for stocks/futures)
+  function symbolUrl(symbol) {
+    if (isCrypto(symbol)) {
+      // ETH/USDT → ETH_USDT
+      var pair = symbol.replace('/', '_');
+      return 'https://www.binance.com/en/trade/' + encodeURIComponent(pair) + '?type=spot';
+    }
+    // Stocks and futures both work on Yahoo Finance (ES=F, AAPL, etc.)
+    return 'https://finance.yahoo.com/quote/' + encodeURIComponent(symbol);
+  }
+
+  // Wrap symbol text in an external link
+  function symbolLink(symbol) {
+    return '<a href="' + symbolUrl(symbol) + '" target="_blank" rel="noopener" ' +
+      'style="color:inherit;text-decoration:none;border-bottom:1px dotted var(--text-tertiary);" ' +
+      'title="View on ' + (isCrypto(symbol) ? 'Binance' : 'Yahoo Finance') + '">' +
+      escHtml(symbol) + '</a>';
   }
 
   // Asset category icon (inline SVG) — crypto coin or stock ticket
@@ -1974,13 +2001,11 @@
 
     document.getElementById('s-positions-count').textContent = (p.positions || []).length;
 
-    // Estimated fees (open + projected close)
-    var feesEl = document.getElementById('s-total-fees');
-    if (p.total_fees != null) {
-      feesEl.textContent = '-' + fmtUsd(p.total_fees);
-    } else {
-      feesEl.textContent = '--';
-    }
+    // Estimated fees — split into open (paid) and close (projected)
+    var openFeesEl = document.getElementById('s-open-fees');
+    var closeFeesEl = document.getElementById('s-close-fees');
+    openFeesEl.textContent = p.open_fees != null ? '-' + fmtUsd(p.open_fees) : '--';
+    closeFeesEl.textContent = p.close_fees != null ? '-' + fmtUsd(p.close_fees) : '--';
 
     var hasActivity = (p.positions && p.positions.length > 0) ||
                       (p.trades_count > 0) || (p.realized_pnl !== 0);
@@ -2159,7 +2184,7 @@
       var allocPct = totalPosValue > 0 ? (mv / totalPosValue * 100) : 0;
 
       html += '<tr class="' + rowClass + '" style="--alloc:' + allocPct.toFixed(1) + '%">' +
-        '<td><div class="pos-symbol-cell">' + symbolCategoryIcon(pos.symbol) + '<strong>' + escHtml(pos.symbol) + '</strong></div></td>' +
+        '<td><div class="pos-symbol-cell">' + symbolCategoryIcon(pos.symbol) + '<strong>' + symbolLink(pos.symbol) + '</strong></div></td>' +
         '<td class="' + sideClass + '">' + sideLabel + '</td>' +
         '<td class="mono">' + fmt(pos.qty, isCrypto(pos.symbol) ? 6 : 0) + '</td>' +
         '<td class="mono">' + fmtUsd(pos.entry_price) + '</td>' +
@@ -2416,7 +2441,7 @@
         : escHtml(h.reason || 'closed');
 
       html += '<tr' + (isOpen ? ' style="opacity:0.75;"' : '') + '>' +
-        '<td><strong>' + escHtml(h.symbol) + '</strong></td>' +
+        '<td><strong>' + symbolLink(h.symbol) + '</strong></td>' +
         '<td class="' + sideClass + '">' + sideLabel + '</td>' +
         '<td class="mono">' + fmt(h.qty, isCrypto(h.symbol) ? 6 : 0) + '</td>' +
         '<td class="mono">' + fmtUsd(h.entry_price) + '</td>' +

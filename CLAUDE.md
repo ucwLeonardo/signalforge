@@ -69,7 +69,7 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
   - 62 CoinGecko ID mappings for major crypto tokens
 - **Background Price Updater**: Server-side thread updates ALL accounts every 30s, frontend auto-refreshes in sync
 - **Price Status**: `/api/price-status` endpoint for monitoring update health
-- **Transaction Fees**: 0.1% per trade (open + close)
+- **Transaction Fees**: Asset-aware via `TradingParams.calculate_fee()` — Stocks: $0 (zero commission), Crypto: 0.1% (Binance taker), Futures: $1.25/contract. Actual open fees recorded per position (`open_fee` field); close fees estimated at current price
 - Signal filtering by account categories with confidence slider (sessionStorage-persisted)
 - **Scan UX**: Stop/Restart with immediate UI feedback, progress panel persists after stop
 - **Watchlist**: Edit config symbols via modal (`GET/POST /api/watchlist`), scan config-only with `config_only` param

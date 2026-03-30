@@ -9,9 +9,6 @@ from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
 
-# Transaction fee rate (0.1% per trade, applied to both open and close)
-TRANSACTION_FEE_RATE = 0.001
-
 from signalforge.paper.models import (
     Portfolio,
     Position,
@@ -19,6 +16,20 @@ from signalforge.paper.models import (
     position_from_dict,
     trade_from_dict,
 )
+
+
+def _fee_for_symbol(symbol: str, qty: float, price: float) -> float:
+    """Calculate transaction fee using asset-type-aware parameters."""
+    from signalforge.config import get_trading_params
+
+    if "/" in symbol:
+        asset_type = "crypto"
+    elif symbol.endswith("=F"):
+        asset_type = "futures"
+    else:
+        asset_type = "stock"
+    return get_trading_params(asset_type).calculate_fee(qty, price)
+
 
 _ACCOUNTS_DIR = Path.home() / ".signalforge" / "accounts"
 _LEGACY_PATH = Path.home() / ".signalforge" / "paper_portfolio.json"
@@ -165,7 +176,7 @@ class PortfolioManager:
                 raise ValueError(f"You already have an open position in {symbol}")
         # Check cash (cost + fee)
         cost = qty * entry_price
-        fee = cost * TRANSACTION_FEE_RATE
+        fee = _fee_for_symbol(symbol, qty, entry_price)
         total_cost = cost + fee
         if total_cost > portfolio.cash:
             raise ValueError(
@@ -180,6 +191,7 @@ class PortfolioManager:
             stop_loss=stop_loss,
             target_price=target_price,
             opened_at=datetime.now(),
+            open_fee=fee,
         )
         portfolio.cash -= total_cost
         portfolio.positions.append(position)
@@ -206,7 +218,7 @@ class PortfolioManager:
             raise ValueError(f"No open position for {symbol}")
 
         cost = qty_add * price
-        fee = cost * TRANSACTION_FEE_RATE
+        fee = _fee_for_symbol(symbol, qty_add, price)
         if cost + fee > portfolio.cash:
             raise ValueError(
                 f"Insufficient cash: need ${cost + fee:.2f}, have ${portfolio.cash:.2f}"
@@ -218,7 +230,8 @@ class PortfolioManager:
         new_qty = pos.qty + qty_add
         avg_entry = (old_value + new_value) / new_qty if new_qty > 0 else price
 
-        updated = replace(pos, qty=new_qty, entry_price=round(avg_entry, 6), current_price=price)
+        updated = replace(pos, qty=new_qty, entry_price=round(avg_entry, 6),
+                          current_price=price, open_fee=pos.open_fee + fee)
         portfolio.positions[pos_idx] = updated
         portfolio.cash -= (cost + fee)
         self._save(portfolio)
@@ -249,7 +262,7 @@ class PortfolioManager:
 
         # Partial close — record a trade for the reduced portion
         proceeds = qty_reduce * price
-        fee = proceeds * TRANSACTION_FEE_RATE
+        fee = _fee_for_symbol(symbol, qty_reduce, price)
         trade = Trade(
             symbol=pos.symbol,
             side=pos.side,
@@ -298,7 +311,7 @@ class PortfolioManager:
         )
         # Add proceeds back to cash, minus exit fee
         proceeds = pos.qty * exit_price
-        fee = proceeds * TRANSACTION_FEE_RATE
+        fee = _fee_for_symbol(symbol, pos.qty, exit_price)
         portfolio.cash += proceeds - fee
         portfolio.positions.pop(pos_idx)
         portfolio.trades.append(trade)
