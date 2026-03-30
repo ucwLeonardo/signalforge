@@ -771,30 +771,33 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                     if _scan_cancel:
                         completed = _scan_progress.get("completed", 0)
                         total = _scan_progress.get("total", 0)
+                        log = _scan_progress.get("log", [])
                         _scan_progress = {
                             "running": False, "total": total,
                             "completed": completed,
                             "symbol": "", "stage": "cancelled",
                             "detail": f"Stopped at {completed}/{total} assets",
                             "phase_pct": _scan_progress.get("phase_pct", 0),
-                            "error": None,
+                            "error": None, "log": log,
                         }
                         sys.stderr.write(f"[Scan] Cancelled: {len(signals)} signals\n")
                     else:
+                        log = _scan_progress.get("log", [])
                         _scan_progress = {
                             "running": False, "total": _scan_progress.get("total", 0),
                             "completed": _scan_progress.get("total", 0),
                             "symbol": "", "stage": "complete",
                             "detail": f"Done: {len(signals)} signals generated",
-                            "phase_pct": 100, "error": None,
+                            "phase_pct": 100, "error": None, "log": log,
                         }
                         sys.stderr.write(f"[Scan] Done: {len(signals)} signals\n")
                 except Exception as exc:
+                    log = _scan_progress.get("log", [])
                     _scan_progress = {
                         "running": False, "total": 0, "completed": 0,
                         "symbol": "", "stage": "error", "detail": "",
                         "phase_pct": _scan_progress.get("phase_pct", 0),
-                        "error": str(exc),
+                        "error": str(exc), "log": log,
                     }
                     sys.stderr.write(f"[Scan] Failed: {exc}\n")
 
@@ -812,7 +815,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         if not _scan_progress["running"]:
             cache = self._get_signal_cache(params)
             signals = cache.load("watchlist") or cache.load("full")
-            count = len(signals)
+            count = len(signals) if signals else 0
         self._send_json({
             "running": _scan_progress["running"],
             "total": _scan_progress.get("total", 0),

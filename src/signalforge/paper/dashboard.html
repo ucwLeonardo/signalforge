@@ -1768,7 +1768,7 @@
     logEl.innerHTML = '';
     logEl.style.display = 'none';
     document.getElementById('sp-log-toggle').classList.remove('open');
-    _updateProgressPanel({ total: 0, completed: 0, symbol: '', stage: 'starting', detail: 'Sending request...' });
+    _updateProgressPanel({ total: 0, completed: 0, symbol: '', stage: 'starting', detail: 'Sending request...', phase_pct: 0, step: 0, step_total: 0 });
     try {
       var res = await fetch(_appendAccount('/api/scan'), {
         method: 'POST',
@@ -2321,9 +2321,9 @@
       });
     }
 
-    // Set slider range to [minSignalConf - 1, maxSignalConf + 1] based on type-filtered signals
+    // Set slider range to [minSignalConf - 1, maxSignalConf] so sliding to max still shows top signal
     var confValues = typeFiltered.map(function(s) { return Math.round((s.confidence || 0) * 100); });
-    var maxConf = confValues.length > 0 ? Math.min(100, Math.max.apply(null, confValues) + 1) : 100;
+    var maxConf = confValues.length > 0 ? Math.min(100, Math.max.apply(null, confValues)) : 100;
     var minConf = confValues.length > 0 ? Math.max(0, Math.min.apply(null, confValues) - 1) : 0;
     if (confInput) {
       var prev = minConfidence;
