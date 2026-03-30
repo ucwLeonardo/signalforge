@@ -111,7 +111,6 @@ _COINGECKO_IDS: dict[str, str] = {
     "ARB": "arbitrum",
     "OP": "optimism",
     "AAVE": "aave",
-    "MATIC": "matic-network",
     "POL": "matic-network",
     "SUI": "sui",
     "AVAX": "avalanche-2",
@@ -160,6 +159,10 @@ _COINGECKO_IDS: dict[str, str] = {
     "W": "wormhole",
     "ENA": "ethena",
     "STRK": "starknet",
+    "S": "fantom",
+    "BNB": "binancecoin",
+    "ETC": "ethereum-classic",
+    "XLM": "stellar",
 }
 
 

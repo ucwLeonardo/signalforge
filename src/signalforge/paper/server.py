@@ -71,6 +71,7 @@ _scan_progress: dict = {
     "symbol": "",
     "stage": "",
     "detail": "",
+    "phase_pct": 0,
     "error": None,
     "log": [],
 }
@@ -738,7 +739,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             _scan_progress = {
                 "running": True, "total": 0, "completed": 0,
                 "symbol": "", "stage": "starting", "detail": "Initializing pipeline...",
-                "error": None, "log": [],
+                "phase_pct": 0, "error": None, "log": [],
             }
 
             def _on_progress(p: dict) -> None:
@@ -775,6 +776,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                             "completed": completed,
                             "symbol": "", "stage": "cancelled",
                             "detail": f"Stopped at {completed}/{total} assets",
+                            "phase_pct": _scan_progress.get("phase_pct", 0),
                             "error": None,
                         }
                         sys.stderr.write(f"[Scan] Cancelled: {len(signals)} signals\n")
@@ -784,13 +786,14 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                             "completed": _scan_progress.get("total", 0),
                             "symbol": "", "stage": "complete",
                             "detail": f"Done: {len(signals)} signals generated",
-                            "error": None,
+                            "phase_pct": 100, "error": None,
                         }
                         sys.stderr.write(f"[Scan] Done: {len(signals)} signals\n")
                 except Exception as exc:
                     _scan_progress = {
                         "running": False, "total": 0, "completed": 0,
                         "symbol": "", "stage": "error", "detail": "",
+                        "phase_pct": _scan_progress.get("phase_pct", 0),
                         "error": str(exc),
                     }
                     sys.stderr.write(f"[Scan] Failed: {exc}\n")
@@ -817,6 +820,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "symbol": _scan_progress.get("symbol", ""),
             "stage": _scan_progress.get("stage", ""),
             "detail": _scan_progress.get("detail", ""),
+            "phase_pct": _scan_progress.get("phase_pct", 0),
             "error": _scan_progress.get("error"),
             "count": count,
             "scan_account": _scan_account,

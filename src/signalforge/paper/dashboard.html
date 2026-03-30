@@ -728,6 +728,7 @@
     letter-spacing: 0.3px;
   }
   .scan-progress .sp-stage.discovery { background: var(--amber-muted); color: var(--amber); }
+  .scan-progress .sp-stage.prices { background: var(--blue-muted); color: var(--blue); }
   .scan-progress .sp-stage.cancelled { background: var(--red-muted); color: var(--red); }
   .scan-progress .sp-stage.data { background: var(--blue-muted); color: var(--blue); }
   .scan-progress .sp-stage.lstm { background: var(--purple-muted); color: var(--purple); }
@@ -1535,7 +1536,9 @@
 
   function _updateProgressPanel(s) {
     var panel = document.getElementById('scan-progress');
-    var pct = s.total > 0 ? Math.round(s.completed / s.total * 100) : 0;
+    // Use backend-computed phase_pct for accurate cross-phase progress
+    var pct = typeof s.phase_pct === 'number' ? Math.round(s.phase_pct) : 0;
+    pct = Math.min(pct, 100);
     document.getElementById('sp-pct').textContent = pct + '%';
     document.getElementById('sp-bar-fill').style.width = pct + '%';
     document.getElementById('sp-symbol').textContent = s.symbol || '--';
@@ -1546,29 +1549,23 @@
     var displayStage = dataStages[s.stage] ? 'data' : s.stage;
     var stageNames = {
       discovery: 'Discovering', data: 'Fetching', data_cached: 'Cached', data_done: 'Downloaded',
-      data_skipped: 'Skipped', data_error: 'Error', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
-      agents: 'TradingAgents', ensemble: 'Combining', done: 'Done', complete: 'Complete',
-      starting: 'Starting', cancelled: 'Stopped', error: 'Error'
+      data_skipped: 'Skipped', data_error: 'Error', prices: 'Live Prices', lstm: 'LSTM', gbm: 'GBM',
+      technical: 'Technical', agents: 'TradingAgents', ensemble: 'Combining', done: 'Done',
+      complete: 'Complete', starting: 'Starting', cancelled: 'Stopped', error: 'Error'
     };
     stageEl.textContent = stageNames[s.stage] || s.stage || '--';
     stageEl.className = 'sp-stage ' + (displayStage || '');
 
-    var stagesPerAsset = 5;
-    var totalSteps = s.total * stagesPerAsset;
-    var stageIdx = {data:0, data_cached:0, data_done:0, data_skipped:0, data_error:0, lstm:1, gbm:2, technical:3, ensemble:4, done:5, complete:5}[s.stage] || 0;
-    var currentSteps = s.completed * stagesPerAsset + (s.stage === 'done' || s.stage === 'complete' ? 0 : stageIdx);
-    pct = totalSteps > 0 ? Math.round(currentSteps / totalSteps * 100) : 0;
-    document.getElementById('sp-pct').textContent = pct + '%';
-    document.getElementById('sp-bar-fill').style.width = pct + '%';
-
-    var phaseNames = {discovery:'Discovering assets',data:'Fetching data',data_cached:'Data up-to-date',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Fetch error',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Stopped',error:'Error'};
+    var phaseNames = {discovery:'Discovering assets',data:'Fetching data',data_cached:'Data up-to-date',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Fetch error',prices:'Fetching live prices',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Stopped',error:'Error'};
     var title;
+    // Display count: use min(completed, total) to prevent overshoot
+    var displayCompleted = Math.min(s.completed || 0, s.total || 0);
     if (s.stage === 'cancelled') {
-      title = 'Scan: Stopped (' + s.completed + '/' + s.total + ')';
+      title = 'Scan: Stopped (' + displayCompleted + '/' + s.total + ')';
     } else if (s.stage === 'complete') {
       title = 'Scan: Complete';
     } else if (s.total > 0) {
-      title = 'Scan: ' + (phaseNames[s.stage] || s.stage) + ' (' + (s.completed + 1) + '/' + s.total + ')';
+      title = 'Scan: ' + (phaseNames[s.stage] || s.stage) + ' (' + displayCompleted + '/' + s.total + ')';
     } else {
       title = 'Scan: Starting...';
     }

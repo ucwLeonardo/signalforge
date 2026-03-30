@@ -139,8 +139,17 @@ def run_pipeline(
     from signalforge.ensemble.targets import TargetCalculator
 
     total = len(symbols)
+    # Phase weights for progress: data=40%, prices=10%, engines=50%
+    _phase1_weight = 40  # data download
+    _phase15_weight = 10  # live price fetch
+    _phase2_weight = 50  # engine processing
 
-    def _report(completed: int, symbol: str, stage: str, detail: str = "") -> None:
+    def _report(completed: int, symbol: str, stage: str, detail: str = "",
+                phase_pct: float = 0.0) -> None:
+        """Report progress with fine-grained phase percentage.
+
+        phase_pct: 0.0-100.0 overall progress across all phases.
+        """
         if progress_cb is not None:
             progress_cb({
                 "total": total,
@@ -148,6 +157,7 @@ def run_pipeline(
                 "symbol": symbol,
                 "stage": stage,
                 "detail": detail,
+                "phase_pct": phase_pct,
             })
 
     def _cancelled() -> bool:
@@ -176,7 +186,8 @@ def run_pipeline(
     # ====================================================================
     # PHASE 1: Download all data first
     # ====================================================================
-    _report(0, "", "discovery", f"Phase 1: Downloading data for {total} assets...")
+    _report(0, "", "discovery", f"Phase 1: Downloading data for {total} assets...",
+            phase_pct=0.0)
     symbol_data: dict[str, "pd.DataFrame"] = {}  # symbol -> DataFrame
 
     for idx, symbol in enumerate(symbols):
@@ -186,7 +197,9 @@ def run_pipeline(
 
         sym_type = _classify_symbol(symbol)
         sym_label = sym_type.capitalize()  # Stock, Crypto, Futures, Options
-        _report(idx, symbol, "data", f"{sym_label} · Fetching ({idx+1}/{total})...")
+        p1_pct = (idx / max(total, 1)) * _phase1_weight
+        _report(idx, symbol, "data", f"{sym_label} · Fetching ({idx+1}/{total})...",
+                phase_pct=p1_pct)
 
         try:
             lookback = _get_lookback_days(sym_type, config)
@@ -201,14 +214,17 @@ def run_pipeline(
                 df = provider.fetch(symbol, interval, start, end)
                 fetch_source = "full"
 
+            p1_done_pct = ((idx + 1) / max(total, 1)) * _phase1_weight
             if df.empty or len(df) < 30:
                 if fetcher is not None and fetcher.last_fetch_source == "empty_skip":
                     _report(idx, symbol, "data_skipped",
-                            f"{sym_label} · Skipped (known empty)")
+                            f"{sym_label} · Skipped (known empty)",
+                            phase_pct=p1_done_pct)
                 else:
                     logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
                     _report(idx, symbol, "data_skipped",
-                            f"{sym_label} · Insufficient data ({len(df)} bars)")
+                            f"{sym_label} · Insufficient data ({len(df)} bars)",
+                            phase_pct=p1_done_pct)
                 continue
 
             # Data quality check: detect sparse/illiquid data
@@ -216,27 +232,34 @@ def run_pipeline(
             if quality_issue:
                 logger.warning(f"Low quality data for {symbol}: {quality_issue}")
                 _report(idx, symbol, "data_skipped",
-                        f"{sym_label} · {quality_issue}")
+                        f"{sym_label} · {quality_issue}",
+                        phase_pct=p1_done_pct)
                 continue
 
             current_price = float(df["close"].iloc[-1])
             symbol_data[symbol] = df
             if fetch_source in ("cache", "cache_fallback"):
                 _report(idx, symbol, "data_cached",
-                        f"{sym_label} · {len(df)} bars, ${current_price:,.2f}")
+                        f"{sym_label} · {len(df)} bars, ${current_price:,.2f}",
+                        phase_pct=p1_done_pct)
             elif fetch_source == "incremental":
                 _report(idx, symbol, "data_done",
-                        f"{sym_label} · Fetched new bars ({len(df)} total, ${current_price:,.2f})")
+                        f"{sym_label} · Fetched new bars ({len(df)} total, ${current_price:,.2f})",
+                        phase_pct=p1_done_pct)
             elif fetch_source == "full":
                 _report(idx, symbol, "data_done",
-                        f"{sym_label} · Downloaded {len(df)} bars (${current_price:,.2f})")
+                        f"{sym_label} · Downloaded {len(df)} bars (${current_price:,.2f})",
+                        phase_pct=p1_done_pct)
 
         except Exception as e:
             logger.error(f"Data fetch failed for {symbol}: {e}")
-            _report(idx, symbol, "data_error", f"{sym_label} · {e}")
+            p1_done_pct = ((idx + 1) / max(total, 1)) * _phase1_weight
+            _report(idx, symbol, "data_error", f"{sym_label} · {e}",
+                    phase_pct=p1_done_pct)
 
     ready_count = len(symbol_data)
-    _report(total, "", "discovery", f"Phase 1 complete: {ready_count}/{total} assets ready")
+    _report(total, "", "discovery", f"Phase 1 complete: {ready_count}/{total} assets ready",
+            phase_pct=_phase1_weight)
     logger.info(f"Data download complete: {ready_count}/{total} assets")
 
     # ====================================================================
@@ -244,7 +267,8 @@ def run_pipeline(
     # ====================================================================
     live_prices: dict[str, float] = {}
     if symbol_data:
-        _report(total, "", "discovery", f"Fetching live prices for {ready_count} assets...")
+        _report(total, "", "prices", f"Fetching live prices for {ready_count} assets...",
+                phase_pct=_phase1_weight)
         try:
             from signalforge.paper.prices import fetch_prices
             live_prices = fetch_prices(list(symbol_data.keys()))
@@ -252,25 +276,32 @@ def run_pipeline(
         except Exception as e:
             logger.warning(f"Live price fetch failed, using bar close: {e}")
 
+        _report(total, "", "prices",
+                f"Live prices: {len(live_prices)}/{ready_count} fetched",
+                phase_pct=_phase1_weight + _phase15_weight)
+
         # Report missing crypto live prices (crypto REQUIRES live price)
         crypto_missing = [
             s for s in symbol_data
             if _classify_symbol(s) == "crypto" and s not in live_prices
         ]
         if crypto_missing:
-            _report(total, "", "discovery",
+            _report(total, "", "prices",
                     f"WARNING: No live price for {len(crypto_missing)} crypto: "
                     f"{', '.join(crypto_missing[:5])}"
-                    + (f" +{len(crypto_missing)-5} more" if len(crypto_missing) > 5 else ""))
+                    + (f" +{len(crypto_missing)-5} more" if len(crypto_missing) > 5 else ""),
+                    phase_pct=_phase1_weight + _phase15_weight)
 
     # ====================================================================
     # PHASE 2: Train/predict engines for each symbol
     # ====================================================================
     all_targets = []
+    p2_base = _phase1_weight + _phase15_weight  # 50% already done
+    p2_total = max(ready_count, 1)
 
     for idx, (symbol, df) in enumerate(symbol_data.items()):
         if _cancelled():
-            _report(idx, "", "cancelled", "Scan cancelled by user")
+            _report(total, "", "cancelled", "Scan cancelled by user")
             return all_targets
 
         sym_type = _classify_symbol(symbol)
@@ -281,8 +312,10 @@ def run_pipeline(
         # Crypto REQUIRES live price — never use stale bar close
         if sym_type == "crypto" and symbol not in live_prices:
             logger.warning(f"No live price for crypto {symbol}, skipping")
-            _report(idx, symbol, "data_skipped",
-                    f"Crypto · No live price available")
+            p2_pct = p2_base + ((idx + 1) / p2_total) * _phase2_weight
+            _report(total, symbol, "data_skipped",
+                    f"Crypto · No live price available",
+                    phase_pct=p2_pct)
             continue
 
         # Prefer live price over bar close
@@ -307,12 +340,15 @@ def run_pipeline(
             logger.info(f"Processing {symbol}: ${current_price:,.2f} ({price_source})")
 
         engine_results: dict[str, dict] = {}
+        # Phase 2 progress for this symbol
+        p2_sym_start = p2_base + (idx / p2_total) * _phase2_weight
+        p2_sym_end = p2_base + ((idx + 1) / p2_total) * _phase2_weight
 
         # --- Kronos ---
         if engines is None or "kronos" in engines or "all" in engines:
             if config.kronos.enabled:
                 if _cancelled():
-                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
                 try:
                     from signalforge.engines.kronos_engine import KronosEngine
@@ -333,7 +369,7 @@ def run_pipeline(
         if engines is None or "qlib" in engines or "all" in engines:
             if config.qlib.enabled:
                 if _cancelled():
-                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
                 try:
                     from signalforge.engines.qlib_engine import QlibEngine
@@ -357,7 +393,7 @@ def run_pipeline(
         if engines is None or "chronos" in engines or "all" in engines:
             if config.chronos.enabled:
                 if _cancelled():
-                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
                 try:
                     from signalforge.engines.chronos_engine import ChronosEngine
@@ -377,9 +413,10 @@ def run_pipeline(
         if engines is None or "lstm" in engines or "all" in engines:
             if config.lstm.enabled:
                 if _cancelled():
-                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
-                _report(idx, symbol, "lstm", f"Training/inference LSTM ({idx+1}/{ready_count})")
+                _report(idx, symbol, "lstm", f"Training/inference LSTM ({idx+1}/{ready_count})",
+                        phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.2)
                 try:
                     from signalforge.engines.lstm_engine import LSTMEngine
                     lstm_eng = LSTMEngine(config.lstm)
@@ -398,9 +435,10 @@ def run_pipeline(
         if engines is None or "gbm" in engines or "all" in engines:
             if config.gbm.enabled:
                 if _cancelled():
-                    _report(idx, "", "cancelled", "Scan cancelled by user")
+                    _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
-                _report(idx, symbol, "gbm", f"Training/inference GBM ({idx+1}/{ready_count})")
+                _report(idx, symbol, "gbm", f"Training/inference GBM ({idx+1}/{ready_count})",
+                        phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.5)
                 try:
                     from signalforge.engines.gbm_engine import GBMEnsembleEngine
                     gbm_eng = GBMEnsembleEngine(config.gbm)
@@ -422,9 +460,10 @@ def run_pipeline(
         # --- Technical ---
         if engines is None or "technical" in engines or "all" in engines:
             if _cancelled():
-                _report(idx, "", "cancelled", "Scan cancelled by user")
+                _report(total, "", "cancelled", "Scan cancelled by user")
                 return all_targets
-            _report(idx, symbol, "technical", "RSI, MACD, BBands, S/R levels")
+            _report(idx, symbol, "technical", "RSI, MACD, BBands, S/R levels",
+                    phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.7)
             try:
                 from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance
                 signals_df = compute_signals(df)
@@ -450,7 +489,8 @@ def run_pipeline(
 
         # Combine signals
         active_engines = sorted(engine_results.keys())
-        _report(idx, symbol, "ensemble", f"Combining: {', '.join(active_engines)}")
+        _report(idx, symbol, "ensemble", f"Combining: {', '.join(active_engines)}",
+                phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.9)
         for eng_name, eng_result in engine_results.items():
             if eng_result.get("type") == "price":
                 eng_result["current_price"] = current_price
@@ -476,7 +516,8 @@ def run_pipeline(
         all_targets.append(target)
         _report(idx + 1, symbol, "done",
                 f"{target.action.value} conf={target.confidence:.0%} "
-                f"entry=${target.entry_price:,.2f}")
+                f"entry=${target.entry_price:,.2f}",
+                phase_pct=p2_sym_end)
         logger.info(
             f"{symbol}: {target.action} | "
             f"Entry: {target.entry_price:.2f} | "
@@ -497,7 +538,8 @@ def run_pipeline(
             top_symbols = [t.symbol for t in sorted_targets[:top_n]]
 
             _report(total, "", "agents",
-                    f"Gemini LLM reviewing top {top_n}: {', '.join(top_symbols)}")
+                    f"Gemini LLM reviewing top {top_n}: {', '.join(top_symbols)}",
+                    phase_pct=95.0)
 
             try:
                 from signalforge.engines.agents_engine import AgentsEngine
@@ -548,5 +590,6 @@ def run_pipeline(
             except Exception as e:
                 logger.error(f"TradingAgents post-analysis failed: {e}")
 
-    _report(total, "", "complete", f"{len(all_targets)} signals from {total} assets")
+    _report(total, "", "complete", f"{len(all_targets)} signals from {total} assets",
+            phase_pct=100.0)
     return all_targets

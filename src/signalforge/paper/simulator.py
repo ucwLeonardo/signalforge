@@ -138,7 +138,8 @@ def generate_real_signals(
     # Report discovery phase
     if progress_cb:
         progress_cb({"total": 0, "completed": 0, "symbol": "",
-                      "stage": "discovery", "detail": f"Discovering assets for {', '.join(categories)}..."})
+                      "stage": "discovery", "detail": f"Discovering assets for {', '.join(categories)}...",
+                      "phase_pct": 0})
 
     symbols = _get_symbols_for_categories(categories, config, config_only=config_only)
     if not symbols:
@@ -151,7 +152,8 @@ def generate_real_signals(
 
     if progress_cb:
         progress_cb({"total": len(symbols), "completed": 0, "symbol": "",
-                      "stage": "discovery", "detail": f"Discovered {len(symbols)} assets, starting pipeline..."})
+                      "stage": "discovery", "detail": f"Discovered {len(symbols)} assets, starting pipeline...",
+                      "phase_pct": 0})
 
     targets = run_pipeline(
         symbols=symbols,

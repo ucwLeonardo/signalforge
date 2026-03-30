@@ -66,11 +66,12 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
   - Crypto fallback chain: CoinGecko (primary, no geo-block) → Binance → Polygon prev close
   - Parallel fetching: crypto/stock/option price requests run concurrently via ThreadPoolExecutor
   - Stocks/Futures: Polygon prev close, Options: Polygon snapshot
-  - 62 CoinGecko ID mappings for major crypto tokens
+  - 66 CoinGecko ID mappings for major crypto tokens
 - **Background Price Updater**: Server-side thread updates ALL accounts every 30s, frontend auto-refreshes in sync
 - **Price Status**: `/api/price-status` endpoint for monitoring update health
 - **Transaction Fees**: Asset-aware via `TradingParams.calculate_fee()` — Stocks: $0 (zero commission), Crypto: 0.1% (Binance taker), Futures: $1.25/contract. Actual open fees recorded per position (`open_fee` field); close fees estimated at current price
 - Signal filtering by account categories with confidence slider (sessionStorage-persisted)
+- **Scan Progress**: Backend-computed `phase_pct` (data 40% → prices 10% → engines 50%) for accurate cross-phase progress bar; dedicated `prices` stage for live price fetching
 - **Scan UX**: Stop/Restart with immediate UI feedback, progress panel persists after stop
 - **Watchlist**: Edit config symbols via modal (`GET/POST /api/watchlist`), scan config-only with `config_only` param
 - **Scan All** vs **Watchlist Scan**: full discovery scan or config-symbols-only quick scan
