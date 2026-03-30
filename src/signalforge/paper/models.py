@@ -27,7 +27,10 @@ class Position:
 
     @property
     def market_value(self) -> float:
-        return self.current_price * self.qty
+        if self.side == "long":
+            return self.current_price * self.qty
+        # Short: collateral (cost basis) + unrealized P&L
+        return self.entry_price * self.qty + self.unrealized_pnl
 
     @property
     def cost_basis(self) -> float:

@@ -86,6 +86,16 @@
     outline-offset: 2px;
   }
 
+  /* ===== Sticky Top Zone (header + summary) ===== */
+  .sticky-top {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-base);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 2px 16px rgba(0,0,0,0.4);
+  }
+
   /* ===== Header ===== */
   header {
     display: flex;
@@ -163,7 +173,7 @@
   .container {
     max-width: 1440px;
     margin: 0 auto;
-    padding: 20px 24px;
+    padding: 20px 32px;
     display: flex;
     flex-direction: column;
     gap: 20px;
@@ -277,95 +287,95 @@
   .card-body { padding: 20px; }
 
   /* ===== Summary Bar ===== */
-  .summary-bar {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 12px;
-    align-items: stretch;
-  }
-  .summary-hero {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 24px 28px;
+  /* ===== Summary Strip (compact single-row, inside sticky-top) ===== */
+  .summary-strip {
+    background: linear-gradient(180deg, var(--bg-overlay) 0%, var(--bg-raised) 100%);
+    border-top: 1px solid var(--border);
+    padding: 0;
     position: relative;
     overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    min-width: 220px;
-    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
   }
-  .summary-hero::before {
+  .summary-strip::before {
     content: '';
     position: absolute;
-    top: 0; left: 0; bottom: 0;
-    width: 3px;
-    background: linear-gradient(180deg, var(--blue), var(--green));
-    opacity: 0.8;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--blue), var(--green), var(--purple), transparent);
+    opacity: 0.5;
   }
-  .summary-hero:hover {
-    border-color: var(--border-hover);
-    box-shadow: var(--shadow-card);
+  .summary-strip-inner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 12px 32px;
+    max-width: 1440px;
+    margin: 0 auto;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-  .summary-hero .label {
-    font-size: 11px;
+  .summary-strip-inner::-webkit-scrollbar { display: none; }
+
+  .ss-hero {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding-right: 20px;
+    flex-shrink: 0;
+  }
+  .ss-hero .ss-label {
+    font-size: 9px;
     text-transform: uppercase;
-    letter-spacing: 0.8px;
+    letter-spacing: 1.2px;
     color: var(--text-tertiary);
-    margin-bottom: 6px;
-    font-weight: 500;
+    font-weight: 600;
   }
-  .summary-hero .value {
+  .ss-hero .ss-value {
     font-family: 'Fira Code', monospace;
-    font-size: 30px;
+    font-size: 26px;
     font-weight: 700;
-    line-height: 1.2;
+    color: var(--text-primary);
+    letter-spacing: -0.5px;
   }
-  .summary-hero .sub {
+  .ss-hero .ss-pnl {
     font-size: 14px;
-    color: var(--text-secondary);
-    margin-top: 6px;
-  }
-  .summary-secondary {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: auto auto;
-    gap: 10px;
-  }
-  .summary-item {
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 10px 14px;
-    transition: border-color var(--transition-normal);
-    overflow: hidden;
-  }
-  .summary-item:hover {
-    border-color: var(--border-hover);
-  }
-  .summary-item .label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-tertiary);
-    margin-bottom: 3px;
     font-weight: 500;
   }
-  .summary-item .value {
+  .ss-divider {
+    width: 1px;
+    height: 32px;
+    background: linear-gradient(180deg, transparent, var(--border-hover), transparent);
+    margin: 0 16px;
+    flex-shrink: 0;
+  }
+  .ss-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 2px 16px;
+    flex-shrink: 0;
+    min-width: 0;
+  }
+  .ss-stat .ss-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-tertiary);
+    font-weight: 500;
+    line-height: 1;
+    margin-bottom: 3px;
+    white-space: nowrap;
+  }
+  .ss-stat .ss-value {
     font-family: 'Fira Code', monospace;
     font-size: 15px;
     font-weight: 600;
     line-height: 1.2;
+    white-space: nowrap;
   }
-  .summary-item.prominent .value {
-    font-size: 18px;
-  }
-  .summary-item .sub {
-    font-size: 11px;
-    color: var(--text-secondary);
-    margin-top: 2px;
-  }
+
+  /* Legacy summary-bar classes kept for backward compat (hidden) */
+  .summary-bar { display: none; }
 
   .positive { color: var(--green); }
   .negative { color: var(--red); }
@@ -407,6 +417,24 @@
 
   .side-long { color: var(--green); font-weight: 600; }
   .side-short { color: var(--red); font-weight: 600; }
+
+  /* Position allocation bar via row background gradient */
+  tbody tr.profit-row[style*="--alloc"] {
+    background: linear-gradient(to right, rgba(52,211,153,0.15) var(--alloc), transparent var(--alloc)) !important;
+  }
+  tbody tr.loss-row[style*="--alloc"] {
+    background: linear-gradient(to right, rgba(248,113,113,0.15) var(--alloc), transparent var(--alloc)) !important;
+  }
+  tbody tr:not(.profit-row):not(.loss-row)[style*="--alloc"] {
+    background: linear-gradient(to right, rgba(148,163,184,0.10) var(--alloc), transparent var(--alloc));
+  }
+  tbody tr[style*="--alloc"]:hover {
+    background: linear-gradient(to right, rgba(148,163,184,0.18) var(--alloc), var(--bg-hover) var(--alloc)) !important;
+  }
+
+  /* Symbol category icon in positions table */
+  .pos-symbol-cell { display: flex; align-items: center; gap: 8px; }
+  .pos-logo { width: 20px; height: 20px; flex-shrink: 0; }
 
   .empty-state {
     text-align: center;
@@ -834,12 +862,6 @@
     header { padding: 12px 16px; }
     header h1 { font-size: 15px; }
     .container { padding: 16px; gap: 16px; }
-    .summary-bar { grid-template-columns: 1fr; }
-    .summary-secondary { grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .summary-hero .value { font-size: 26px; }
-    .summary-hero { min-width: unset; }
-    .summary-item .value { font-size: 14px; }
-    .summary-item.prominent .value { font-size: 16px; }
     .signals-grid { grid-template-columns: 1fr; }
     .card-body { padding: 16px; }
     .card-header { padding: 12px 16px; }
@@ -847,19 +869,17 @@
     .modal { min-width: calc(100vw - 32px); margin: 16px; }
     .inline-form .form-row { gap: 8px; }
     .form-group input, .form-group select { width: 100px; }
+    .ss-hero .ss-value { font-size: 18px; }
+    .ss-stat .ss-value { font-size: 12px; }
   }
 
   @media (max-width: 480px) {
     header { flex-direction: column; align-items: stretch; gap: 8px; }
     header .controls { justify-content: flex-start; overflow-x: auto; padding-bottom: 4px; }
-    .summary-bar { grid-template-columns: 1fr; }
-    .summary-secondary { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    .summary-hero .value { font-size: 22px; }
-    .summary-hero { min-width: unset; }
-    .summary-item { padding: 8px 10px; }
-    .summary-item .value { font-size: 13px; }
-    .summary-item.prominent .value { font-size: 15px; }
-    .summary-item .label { font-size: 9px; }
+    .ss-hero .ss-value { font-size: 16px; }
+    .ss-hero { gap: 6px; }
+    .ss-stat { padding: 2px 8px; }
+    .ss-divider { margin: 0 8px; }
   }
 </style>
 </head>
@@ -867,6 +887,7 @@
 
 <div class="loading" id="loading-bar"></div>
 
+<div class="sticky-top" id="sticky-top">
 <header>
   <div class="header-brand">
     <div class="logo" aria-hidden="true">
@@ -900,6 +921,10 @@
     </div>
     <div class="controls-divider"></div>
     <div class="controls-group">
+      <button class="btn btn-sm" onclick="depositCurrentAccount()" aria-label="Deposit funds" style="border-color:var(--green);color:var(--green);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Deposit
+      </button>
       <button class="btn btn-sm btn-danger-outline" onclick="resetCurrentAccount()" aria-label="Reset current account">Reset</button>
       <button class="btn btn-sm btn-ghost" onclick="deleteCurrentAccount()" aria-label="Delete current account" style="color:var(--red);">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
@@ -912,6 +937,41 @@
     </button>
   </div>
 </header>
+
+  <!-- A) Portfolio Summary (inside sticky-top) -->
+  <div id="portfolio-overview" class="summary-strip" style="display:none;">
+    <div class="summary-strip-inner">
+      <div class="ss-hero">
+        <span class="ss-label">PORTFOLIO</span>
+        <span class="ss-value" id="s-total-value">--</span>
+        <span class="ss-pnl mono" id="s-total-pnl-pct">--</span>
+      </div>
+      <div class="ss-divider"></div>
+      <div class="ss-stat">
+        <span class="ss-label">P&amp;L</span>
+        <span class="ss-value" id="s-total-pnl">--</span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">Cash</span>
+        <span class="ss-value" id="s-cash">--</span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">Positions</span>
+        <span class="ss-value" id="s-positions-value">--</span>
+      </div>
+      <div id="s-realized-pnl" style="display:none">--</div>
+      <div class="ss-stat">
+        <span class="ss-label"># Pos</span>
+        <span class="ss-value" id="s-positions-count">0</span>
+      </div>
+      <div class="ss-stat">
+        <span class="ss-label">Est. Fees</span>
+        <span class="ss-value negative" id="s-total-fees" title="Opening fees (paid) + projected closing fees">--</span>
+      </div>
+    </div>
+    <div id="s-unrealized-pnl" style="display:none">--</div>
+  </div>
+</div><!-- end sticky-top -->
 
 <!-- Create Account Modal -->
 <div id="create-account-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Create new trading account" onclick="if(event.target===this)hideCreateAccountModal()">
@@ -1039,42 +1099,6 @@
 </div>
 
 <div class="container">
-  <!-- A) Portfolio Overview (hidden until positions/trades exist) -->
-  <div id="portfolio-overview" style="display:none;">
-    <div class="summary-bar" id="summary-bar">
-      <div class="summary-hero">
-        <div class="label">Total Value</div>
-        <div class="value mono" id="s-total-value">--</div>
-        <div class="sub mono" id="s-total-pnl-pct">--</div>
-      </div>
-      <div class="summary-secondary">
-        <div class="summary-item prominent">
-          <div class="label">Total P&amp;L</div>
-          <div class="value mono" id="s-total-pnl">--</div>
-        </div>
-        <div class="summary-item">
-          <div class="label">Cash</div>
-          <div class="value mono" id="s-cash">--</div>
-        </div>
-        <div class="summary-item">
-          <div class="label">Positions</div>
-          <div class="value mono" id="s-positions-value">--</div>
-        </div>
-        <div class="summary-item prominent">
-          <div class="label">Unrealized</div>
-          <div class="value mono" id="s-unrealized-pnl">--</div>
-        </div>
-        <div class="summary-item">
-          <div class="label">Realized</div>
-          <div class="value mono" id="s-realized-pnl">--</div>
-        </div>
-        <div class="summary-item">
-          <div class="label">Positions #</div>
-          <div class="value mono" id="s-positions-count">0</div>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- A2) Account Categories -->
   <div id="account-categories" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--bg-raised);">
@@ -1193,6 +1217,12 @@
         <span id="signals-count" class="mono" style="font-size:13px;color:var(--text-tertiary);margin-left:8px;"></span>
       </span>
       <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+        <select id="signal-type-filter" class="select-control" style="font-size:13px;padding:3px 8px;min-width:80px;cursor:pointer;" onchange="setSignalTypeFilter(this.value)" aria-label="Filter by asset type">
+          <option value="all">All</option>
+          <option value="stocks">Stocks</option>
+          <option value="crypto">Crypto</option>
+          <option value="futures">Futures</option>
+        </select>
         <label class="mono" style="font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;" title="Only show signals above this confidence">
           Conf &ge; <span id="confidence-value" style="min-width:36px;text-align:right;">50%</span>
           <input id="confidence-filter" type="range" min="0" max="100" value="50" step="1"
@@ -1237,6 +1267,7 @@
     </div>
   </div>
 </div>
+</div><!-- end container -->
 
 <div class="toast" id="toast" role="alert" aria-live="polite"></div>
 
@@ -1251,8 +1282,9 @@
   let history = [];
   let valueChart = null;
   // No refresh timer — all updates are user-triggered or server-side
-  let currentAccount = 'default';
+  let currentAccount = sessionStorage.getItem('sf_account') || 'default';
   let minConfidence = parseInt(sessionStorage.getItem('sf_minConf')) || 50;
+  let signalTypeFilter = sessionStorage.getItem('sf_signalType') || 'all'; // 'all', 'stocks', 'crypto', 'futures'
 
   // --- Custom Confirm Modal ---
   let _confirmResolveFn = null;
@@ -1344,6 +1376,16 @@
     return symbol && symbol.indexOf('/') !== -1;
   }
 
+  // Asset category icon (inline SVG) — crypto coin or stock ticket
+  function symbolCategoryIcon(symbol) {
+    if (isCrypto(symbol)) {
+      // Bitcoin-style crypto coin icon
+      return '<svg class="pos-logo" viewBox="0 0 24 24" fill="none" stroke="#f7931a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.5 8h4a2 2 0 110 4H9.5m0-4v4m0-4V6.5m0 5.5h4.5a2 2 0 110 4H9.5m0-4v4m0 0V18m2-12v1.5m0 9V18"/></svg>';
+    }
+    // Stock chart/ticket icon
+    return '<svg class="pos-logo" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>';
+  }
+
   // --- API ---
   function _appendAccount(path) {
     var sep = path.indexOf('?') === -1 ? '?' : '&';
@@ -1394,6 +1436,7 @@
 
   window.switchAccount = function(name) {
     currentAccount = name;
+    sessionStorage.setItem('sf_account', name);
     if (valueChart) { valueChart.destroy(); valueChart = null; }
     refreshAll();
   };
@@ -1432,6 +1475,7 @@
       });
       hideCreateAccountModal();
       currentAccount = name;
+      sessionStorage.setItem('sf_account', name);
       await fetchAccounts();
       document.getElementById('account-selector').value = name;
       if (valueChart) { valueChart.destroy(); valueChart = null; }
@@ -1459,7 +1503,7 @@
     var dataStages = {data:1, data_cached:1, data_done:1, data_skipped:1, data_error:1};
     var displayStage = dataStages[s.stage] ? 'data' : s.stage;
     var stageNames = {
-      discovery: 'Discovering', data: 'Fetching', data_cached: 'Cached', data_done: 'Data',
+      discovery: 'Discovering', data: 'Fetching', data_cached: 'Cached', data_done: 'Downloaded',
       data_skipped: 'Skipped', data_error: 'Error', lstm: 'LSTM', gbm: 'GBM', technical: 'Technical',
       agents: 'TradingAgents', ensemble: 'Combining', done: 'Done', complete: 'Complete',
       starting: 'Starting', cancelled: 'Stopped', error: 'Error'
@@ -1475,7 +1519,7 @@
     document.getElementById('sp-pct').textContent = pct + '%';
     document.getElementById('sp-bar-fill').style.width = pct + '%';
 
-    var phaseNames = {discovery:'Discovering assets',data:'Fetching data',data_cached:'Data up-to-date',data_done:'Data ready',data_skipped:'Skipped',data_error:'Fetch error',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Stopped',error:'Error'};
+    var phaseNames = {discovery:'Discovering assets',data:'Fetching data',data_cached:'Data up-to-date',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Fetch error',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Stopped',error:'Error'};
     var title;
     if (s.stage === 'cancelled') {
       title = 'Scan: Stopped (' + s.completed + '/' + s.total + ')';
@@ -1528,7 +1572,7 @@
   var _scanLogEntries = [];
   function _syncServerLog(serverLog) {
     if (serverLog.length <= _syncedLogCount) return;
-    var stageNames = {discovery:'Discovery',data:'Fetching',data_cached:'Cached',data_done:'Data',data_skipped:'Skipped',data_error:'Error',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',cancelled:'Stopped',error:'Error'};
+    var stageNames = {discovery:'Discovery',data:'Fetching',data_cached:'Cached',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Error',lstm:'LSTM',gbm:'GBM',technical:'Technical',agents:'TradingAgents',ensemble:'Combining',done:'Done',complete:'Complete',starting:'Starting',cancelled:'Stopped',error:'Error'};
     var stageColors = {discovery:'var(--text-secondary)',data:'var(--blue)',data_cached:'var(--text-tertiary)',data_done:'var(--blue)',data_skipped:'var(--amber)',data_error:'var(--red)',lstm:'var(--purple)',gbm:'var(--amber)',technical:'var(--green)',agents:'var(--red)',ensemble:'var(--text-secondary)',done:'var(--green)',complete:'var(--green)',cancelled:'var(--red)',error:'var(--red)'};
     var newEntries = serverLog.slice(_syncedLogCount);
     newEntries.forEach(function(e) {
@@ -1718,6 +1762,31 @@
     }
   };
 
+  window.depositCurrentAccount = async function() {
+    var input = prompt('Deposit amount for "' + currentAccount + '":', '1000');
+    if (!input) return;
+    var amount = parseFloat(input);
+    if (isNaN(amount) || amount <= 0) {
+      showToast('Invalid amount', 'error');
+      return;
+    }
+    try {
+      await fetch('/api/accounts/deposit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: currentAccount, amount: amount })
+      }).then(function(r) {
+        if (!r.ok) return r.json().then(function(j) { throw new Error(j.error || 'Failed'); });
+        return r.json();
+      });
+      await fetchAccounts();
+      await refreshAll();
+      showToast('Deposited $' + amount.toLocaleString() + ' to "' + currentAccount + '"');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   window.resetCurrentAccount = async function() {
     var ok = await showConfirm(
       'Reset Account',
@@ -1761,6 +1830,7 @@
       });
       showToast('Account "' + currentAccount + '" deleted');
       currentAccount = 'default';
+      sessionStorage.setItem('sf_account', 'default');
       if (valueChart) { valueChart.destroy(); valueChart = null; }
       await fetchAccounts();
       document.getElementById('account-selector').value = 'default';
@@ -1874,21 +1944,28 @@
 
     const pnlEl = document.getElementById('s-total-pnl');
     pnlEl.textContent = fmtUsd(p.total_pnl);
-    pnlEl.className = 'value mono ' + pnlClass(p.total_pnl);
+    pnlEl.className = 'ss-value mono ' + pnlClass(p.total_pnl);
 
     const pctEl = document.getElementById('s-total-pnl-pct');
     pctEl.textContent = fmtUsd(p.total_pnl) + ' (' + fmtPct(p.total_pnl_pct) + ')';
-    pctEl.className = 'sub mono ' + pnlClass(p.total_pnl_pct);
+    pctEl.className = 'ss-pnl mono ' + pnlClass(p.total_pnl_pct);
 
-    const upEl = document.getElementById('s-unrealized-pnl');
-    upEl.textContent = fmtUsd(p.unrealized_pnl);
-    upEl.className = 'value mono ' + pnlClass(p.unrealized_pnl);
+    // Unrealized (hidden but kept for data)
+    document.getElementById('s-unrealized-pnl').textContent = fmtUsd(p.unrealized_pnl);
 
     const rpEl = document.getElementById('s-realized-pnl');
     rpEl.textContent = fmtUsd(p.realized_pnl);
-    rpEl.className = 'value mono ' + pnlClass(p.realized_pnl);
+    rpEl.className = 'ss-value mono ' + pnlClass(p.realized_pnl);
 
     document.getElementById('s-positions-count').textContent = (p.positions || []).length;
+
+    // Estimated fees (open + projected close)
+    var feesEl = document.getElementById('s-total-fees');
+    if (p.total_fees != null) {
+      feesEl.textContent = '-' + fmtUsd(p.total_fees);
+    } else {
+      feesEl.textContent = '--';
+    }
 
     var hasActivity = (p.positions && p.positions.length > 0) ||
                       (p.trades_count > 0) || (p.realized_pnl !== 0);
@@ -2025,6 +2102,32 @@
       return;
     }
 
+    // Sort positions: Stock > Options > Futures > Crypto, Long > Short, then by market value desc
+    var catOrder = { stock: 0, options: 1, futures: 2, crypto: 3 };
+    function posCat(sym) {
+      if (sym.indexOf('/') !== -1) return 'crypto';
+      if (sym.indexOf(' ') !== -1 || /^[A-Z]+\d{6}[CP]\d{8}$/.test(sym)) return 'options';
+      if (sym.endsWith('=F')) return 'futures';
+      return 'stock';
+    }
+    positions.sort(function(a, b) {
+      var ca = catOrder[posCat(a.symbol)] || 0, cb = catOrder[posCat(b.symbol)] || 0;
+      if (ca !== cb) return ca - cb;
+      var sa = (a.side || '').toLowerCase() === 'long' ? 0 : 1;
+      var sb = (b.side || '').toLowerCase() === 'long' ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      var mva = Math.abs((a.current_price || a.entry_price || 0) * (a.qty || 0));
+      var mvb = Math.abs((b.current_price || b.entry_price || 0) * (b.qty || 0));
+      return mvb - mva;
+    });
+
+    // Compute total positions value for allocation bar widths
+    var totalPosValue = 0;
+    positions.forEach(function(pos) {
+      var mv = Math.abs((pos.current_price || pos.entry_price || 0) * (pos.qty || 0));
+      totalPosValue += mv;
+    });
+
     let html = '<div class="table-wrapper"><table><thead><tr>' +
       '<th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Current</th>' +
       '<th>Target</th><th>Stop</th><th>P&L ($)</th><th>P&L (%)</th>' +
@@ -2036,8 +2139,12 @@
       const sideClass = (pos.side && pos.side.toLowerCase() === 'short') ? 'side-short' : 'side-long';
       const sideLabel = (pos.side && pos.side.toLowerCase() === 'short') ? 'SHORT' : 'LONG';
 
-      html += '<tr class="' + rowClass + '">' +
-        '<td><strong>' + escHtml(pos.symbol) + '</strong></td>' +
+      // Allocation bar width: proportional to position market value
+      var mv = Math.abs((pos.current_price || pos.entry_price || 0) * (pos.qty || 0));
+      var allocPct = totalPosValue > 0 ? (mv / totalPosValue * 100) : 0;
+
+      html += '<tr class="' + rowClass + '" style="--alloc:' + allocPct.toFixed(1) + '%">' +
+        '<td><div class="pos-symbol-cell">' + symbolCategoryIcon(pos.symbol) + '<strong>' + escHtml(pos.symbol) + '</strong></div></td>' +
         '<td class="' + sideClass + '">' + sideLabel + '</td>' +
         '<td class="mono">' + fmt(pos.qty, isCrypto(pos.symbol) ? 6 : 0) + '</td>' +
         '<td class="mono">' + fmtUsd(pos.entry_price) + '</td>' +
@@ -2121,13 +2228,29 @@
       if (buildBtn) { buildBtn.style.display = 'none'; }
       if (topNInput) { document.getElementById('build-top-n-label').style.display = 'none'; }
       if (confInput) { confInput.parentElement.style.display = 'none'; }
+      var _tf = document.getElementById('signal-type-filter');
+      if (_tf) _tf.style.display = 'none';
       return;
     }
 
-    // Set slider range to [minSignalConf, maxSignalConf] so full range is always usable
-    var confValues = signals.map(function(s) { return Math.round((s.confidence || 0) * 100); });
-    var maxConf = Math.max.apply(null, confValues);
-    var minConf = Math.min.apply(null, confValues);
+    // Apply asset type filter first
+    var typeFilterSel = document.getElementById('signal-type-filter');
+    if (typeFilterSel) typeFilterSel.style.display = '';
+    var typeFiltered = signals;
+    if (signalTypeFilter && signalTypeFilter !== 'all') {
+      typeFiltered = signals.filter(function(s) {
+        var sym = s.symbol || '';
+        if (signalTypeFilter === 'crypto') return sym.includes('/');
+        if (signalTypeFilter === 'futures') return sym.endsWith('=F');
+        if (signalTypeFilter === 'stocks') return !sym.includes('/') && !sym.endsWith('=F');
+        return true;
+      });
+    }
+
+    // Set slider range to [minSignalConf - 1, maxSignalConf + 1] based on type-filtered signals
+    var confValues = typeFiltered.map(function(s) { return Math.round((s.confidence || 0) * 100); });
+    var maxConf = confValues.length > 0 ? Math.min(100, Math.max.apply(null, confValues) + 1) : 100;
+    var minConf = confValues.length > 0 ? Math.max(0, Math.min.apply(null, confValues) - 1) : 0;
     if (confInput) {
       var prev = minConfidence;
       confInput.min = minConf;
@@ -2141,11 +2264,11 @@
       }
     }
 
-    // Apply confidence filter
+    // Apply confidence filter on type-filtered signals
     var threshold = minConfidence / 100;
-    var filtered = signals.filter(function(s) { return (s.confidence || 0) >= threshold; });
+    var filtered = typeFiltered.filter(function(s) { return (s.confidence || 0) >= threshold; });
 
-    var totalCount = signals.length;
+    var totalCount = typeFiltered.length;
     var buyCount = filtered.filter(function(s) { return s.action && s.action.toUpperCase() === 'BUY'; }).length;
     var sellCount = filtered.length - buyCount;
 
@@ -2414,12 +2537,19 @@
     var catSummary = Object.keys(catCounts).map(function(c) { return c + ' ' + catCounts[c]; }).join(', ');
 
     var cash = portfolio ? portfolio.cash : 0;
+    var totalVal = portfolio ? portfolio.total_value : 0;
+    var posCount = portfolio ? portfolio.positions.length : 0;
+    var modeLabel = posCount > 0
+      ? 'Rebalance — adjust existing positions + open/close to match new allocation'
+      : 'Build — open new positions from scratch';
     var body = '<div style="display:flex;flex-direction:column;gap:10px;">' +
       '<div><strong>Selection:</strong> Top ' + topN + ' from ' + buySignals.length + ' BUY signals</div>' +
       '<div><strong>Strategy:</strong> Stratified — each asset class gets at least 1 slot, rest by confidence</div>' +
       '<div><strong>Signal pool:</strong> ' + catSummary + '</div>' +
-      '<div><strong>Available cash:</strong> <span class="mono">' + fmtUsd(cash) + '</span></div>' +
-      '<div><strong>Sizing:</strong> Half-Kelly criterion (20% cash reserve)</div>' +
+      '<div><strong>Mode:</strong> ' + modeLabel + '</div>' +
+      (posCount > 0 ? '<div><strong>Current:</strong> ' + posCount + ' positions, total value <span class="mono">' + fmtUsd(totalVal) + '</span></div>' : '') +
+      '<div><strong>Cash available:</strong> <span class="mono">' + fmtUsd(cash) + '</span></div>' +
+      '<div><strong>Sizing:</strong> Half-Kelly on total portfolio value (8% cash reserve)</div>' +
     '</div>';
 
     var ok = await showConfirm('Build Portfolio', body, { okText: 'Build Portfolio' });
@@ -2427,18 +2557,33 @@
 
     var btn = document.getElementById('auto-build-btn');
     btn.disabled = true;
-    btn.textContent = 'Building...';
+    btn.textContent = 'Fetching prices...';
+
+    // Elapsed timer so user sees it's not stuck
+    var startTime = Date.now();
+    var timerInterval = setInterval(function() {
+      var elapsed = Math.round((Date.now() - startTime) / 1000);
+      if (btn.disabled) btn.textContent = 'Fetching prices... ' + elapsed + 's';
+    }, 1000);
 
     try {
       var result = await apiPost('/api/auto-build', { top_n: topN });
+      clearInterval(timerInterval);
+      btn.textContent = 'Allocating...';
+
       var opened = result.positions_opened || [];
-      if (opened.length > 0) {
-        var summary = opened.map(function(p) {
-          return p.symbol + ' (' + p.allocation_pct + '%, ' + fmtUsd(p.cost) + ')';
-        }).join(', ');
-        showToast('Opened ' + opened.length + ' positions: ' + summary, 'success');
+      var added = result.positions_added || [];
+      var reduced = result.positions_reduced || [];
+      var closed = result.positions_closed || [];
+      var parts = [];
+      if (opened.length > 0) parts.push('Opened ' + opened.length + ': ' + opened.map(function(p) { return p.symbol + ' ' + fmtUsd(p.cost); }).join(', '));
+      if (added.length > 0) parts.push('Added ' + added.length + ': ' + added.map(function(p) { return p.symbol + ' +' + fmtUsd(p.cost); }).join(', '));
+      if (reduced.length > 0) parts.push('Reduced ' + reduced.length + ': ' + reduced.map(function(p) { return p.symbol + ' -' + fmtUsd(p.proceeds); }).join(', '));
+      if (closed.length > 0) parts.push('Closed ' + closed.length + ': ' + closed.map(function(p) { return p.symbol; }).join(', '));
+      if (parts.length > 0) {
+        showToast(parts.join(' | '), 'success');
       } else {
-        showToast('No positions opened. ' + (result.error || ''), 'error');
+        showToast('No changes needed. ' + (result.error || ''), 'error');
       }
       if (result.errors && result.errors.length > 0) {
         var errMsg = result.errors.map(function(e) { return e.symbol + ': ' + e.error; }).join(', ');
@@ -2446,8 +2591,10 @@
       }
       refreshAll();
     } catch (e) {
+      clearInterval(timerInterval);
       showToast('Auto build failed: ' + e.message, 'error');
     } finally {
+      clearInterval(timerInterval);
       btn.disabled = false;
       btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg> Auto Build';
     }
@@ -2463,6 +2610,18 @@
   };
 
   window.refreshAll = refreshAll;
+
+  // --- Signal type filter ---
+  window.setSignalTypeFilter = function(val) {
+    signalTypeFilter = val;
+    sessionStorage.setItem('sf_signalType', val);
+    renderSignals();
+  };
+  // Restore saved type filter on load
+  (function() {
+    var sel = document.getElementById('signal-type-filter');
+    if (sel && signalTypeFilter) sel.value = signalTypeFilter;
+  })();
 
   // --- Confidence slider ---
   (function() {

@@ -8,7 +8,7 @@ from typing import Sequence
 import pandas as pd
 from loguru import logger
 
-from signalforge.config import Config
+from signalforge.config import Config, get_trading_params
 
 
 def _classify_symbol(symbol: str) -> str:
@@ -24,6 +24,62 @@ def _classify_symbol(symbol: str) -> str:
     return "stock"
 
 
+def _check_data_quality(df: pd.DataFrame, symbol: str, sym_type: str) -> str | None:
+    """Return a reason string if data quality is too low, else None.
+
+    Freshness rules:
+      - Stocks/Futures: last bar must be from the most recent US trading day.
+      - Crypto: bars only feed models; allow up to 7 days stale.
+        Live price (fetched separately) provides minute-level freshness.
+    """
+    if len(df) < 30:
+        return None  # Already handled by min-bars check
+
+    # --- Freshness check ---
+    if "timestamp" in df.columns:
+        last_ts = pd.Timestamp(df["timestamp"].iloc[-1])
+        last_bar_date = last_ts.date()
+        if last_ts.tzinfo is not None:
+            last_bar_date = last_ts.tz_convert("UTC").date()
+
+        if sym_type in ("stock", "futures"):
+            from signalforge.data.calendar import last_trading_day
+            expected = last_trading_day()
+            if last_bar_date < expected:
+                return f"Stale (last: {last_bar_date}, expected: {expected})"
+        elif sym_type == "crypto":
+            # Crypto bars are for model training only; live price handles
+            # current pricing. Allow up to 7 days stale.
+            if last_ts.tzinfo is not None:
+                now = pd.Timestamp.now(tz="UTC")
+            else:
+                now = pd.Timestamp.now()
+            staleness_days = (now - last_ts).days
+            if staleness_days > 7:
+                return f"Stale ({staleness_days}d, last: {last_bar_date})"
+
+    # --- Sparsity check ---
+    if "timestamp" in df.columns and len(df) >= 30:
+        recent = df.tail(30)
+        ts = pd.to_datetime(recent["timestamp"])
+        date_range = (ts.iloc[-1] - ts.iloc[0]).days
+        if date_range > 0:
+            fill_rate = len(recent) / date_range
+            if sym_type == "crypto" and fill_rate < 0.4:
+                return f"Sparse ({len(recent)} bars over {date_range}d, fill={fill_rate:.0%})"
+            if sym_type in ("stock", "futures") and fill_rate < 0.3:
+                return f"Sparse ({len(recent)} bars over {date_range}d, fill={fill_rate:.0%})"
+
+    # --- Flat/illiquid candle check ---
+    recent = df.tail(30)
+    flat_count = ((recent["open"] == recent["close"]) &
+                  (recent["high"] == recent["low"])).sum()
+    if flat_count > 15:
+        return f"Illiquid ({flat_count}/30 flat candles)"
+
+    return None
+
+
 def _get_lookback_days(symbol_type: str, config: Config) -> int:
     if symbol_type == "crypto":
         return config.data.crypto_lookback_days
@@ -32,6 +88,22 @@ def _get_lookback_days(symbol_type: str, config: Config) -> int:
     if symbol_type == "options":
         return config.data.options_lookback_days
     return config.data.stocks_lookback_days
+
+
+def _compute_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """Compute Average True Range from OHLC data."""
+    if len(df) < 2:
+        return 0.0
+    high = df["high"].values
+    low = df["low"].values
+    close = df["close"].values
+    tr_values = []
+    for i in range(1, len(df)):
+        tr = max(high[i] - low[i], abs(high[i] - close[i - 1]), abs(low[i] - close[i - 1]))
+        tr_values.append(tr)
+    if not tr_values:
+        return 0.0
+    return float(sum(tr_values[-period:]) / min(len(tr_values), period))
 
 
 def run_pipeline(
@@ -130,9 +202,21 @@ def run_pipeline(
                 fetch_source = "full"
 
             if df.empty or len(df) < 30:
-                logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
+                if fetcher is not None and fetcher.last_fetch_source == "empty_skip":
+                    _report(idx, symbol, "data_skipped",
+                            f"{sym_label} · Skipped (known empty)")
+                else:
+                    logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
+                    _report(idx, symbol, "data_skipped",
+                            f"{sym_label} · Insufficient data ({len(df)} bars)")
+                continue
+
+            # Data quality check: detect sparse/illiquid data
+            quality_issue = _check_data_quality(df, symbol, sym_type)
+            if quality_issue:
+                logger.warning(f"Low quality data for {symbol}: {quality_issue}")
                 _report(idx, symbol, "data_skipped",
-                        f"{sym_label} · Insufficient data ({len(df)} bars)")
+                        f"{sym_label} · {quality_issue}")
                 continue
 
             current_price = float(df["close"].iloc[-1])
@@ -156,6 +240,30 @@ def run_pipeline(
     logger.info(f"Data download complete: {ready_count}/{total} assets")
 
     # ====================================================================
+    # PHASE 1.5: Fetch live prices for all ready symbols
+    # ====================================================================
+    live_prices: dict[str, float] = {}
+    if symbol_data:
+        _report(total, "", "discovery", f"Fetching live prices for {ready_count} assets...")
+        try:
+            from signalforge.paper.prices import fetch_prices
+            live_prices = fetch_prices(list(symbol_data.keys()))
+            logger.info(f"Live prices fetched: {len(live_prices)}/{ready_count}")
+        except Exception as e:
+            logger.warning(f"Live price fetch failed, using bar close: {e}")
+
+        # Report missing crypto live prices (crypto REQUIRES live price)
+        crypto_missing = [
+            s for s in symbol_data
+            if _classify_symbol(s) == "crypto" and s not in live_prices
+        ]
+        if crypto_missing:
+            _report(total, "", "discovery",
+                    f"WARNING: No live price for {len(crypto_missing)} crypto: "
+                    f"{', '.join(crypto_missing[:5])}"
+                    + (f" +{len(crypto_missing)-5} more" if len(crypto_missing) > 5 else ""))
+
+    # ====================================================================
     # PHASE 2: Train/predict engines for each symbol
     # ====================================================================
     all_targets = []
@@ -165,8 +273,39 @@ def run_pipeline(
             _report(idx, "", "cancelled", "Scan cancelled by user")
             return all_targets
 
-        logger.info(f"Processing {symbol}")
-        current_price = float(df["close"].iloc[-1])
+        sym_type = _classify_symbol(symbol)
+        bar_close = float(df["close"].iloc[-1])
+        symbol_atr = _compute_atr(df)
+        trading_params = get_trading_params(sym_type)
+
+        # Crypto REQUIRES live price — never use stale bar close
+        if sym_type == "crypto" and symbol not in live_prices:
+            logger.warning(f"No live price for crypto {symbol}, skipping")
+            _report(idx, symbol, "data_skipped",
+                    f"Crypto · No live price available")
+            continue
+
+        # Prefer live price over bar close
+        current_price = live_prices.get(symbol, bar_close)
+        price_source = "live" if symbol in live_prices else "bar"
+
+        # Warn when live price diverges >5% from bar close (bad Polygon data)
+        if symbol in live_prices and bar_close > 0:
+            divergence = abs(current_price - bar_close) / bar_close
+            if divergence > 0.05:
+                logger.warning(
+                    f"{symbol}: live ${current_price:,.2f} diverges "
+                    f"{divergence:.1%} from bar close ${bar_close:,.2f} — "
+                    f"Polygon daily data may be from illiquid source")
+            elif divergence > 0.01:
+                logger.info(
+                    f"Processing {symbol}: live=${current_price:,.2f} "
+                    f"(bar=${bar_close:,.2f}, diff={((current_price - bar_close) / bar_close):+.1%})")
+            else:
+                logger.info(f"Processing {symbol}: ${current_price:,.2f} ({price_source})")
+        else:
+            logger.info(f"Processing {symbol}: ${current_price:,.2f} ({price_source})")
+
         engine_results: dict[str, dict] = {}
 
         # --- Kronos ---
@@ -203,11 +342,13 @@ def run_pipeline(
                     if not qlib_pred.empty and "predicted_return" in qlib_pred.columns:
                         pred_ret = float(qlib_pred["predicted_return"].iloc[-1])
                         pred_close = current_price * (1 + pred_ret)
+                        # Use ATR-based range instead of hardcoded +/-2%
+                        qlib_range = symbol_atr * 1.5 if symbol_atr > 0 else pred_close * 0.02
                         engine_results["qlib"] = {
                             "type": "price",
                             "predicted_close": pred_close,
-                            "predicted_high": pred_close * 1.02,
-                            "predicted_low": pred_close * 0.98,
+                            "predicted_high": pred_close + qlib_range,
+                            "predicted_low": pred_close - qlib_range,
                         }
                 except Exception as e:
                     logger.error(f"Qlib failed for {symbol}: {e}")
@@ -267,11 +408,13 @@ def run_pipeline(
                     if not gbm_pred.empty and "predicted_return" in gbm_pred.columns:
                         pred_ret = float(gbm_pred["predicted_return"].iloc[-1])
                         pred_close = current_price * (1 + pred_ret)
+                        # Use ATR-based range instead of hardcoded +/-2%
+                        gbm_range = symbol_atr * 1.5 if symbol_atr > 0 else pred_close * 0.02
                         engine_results["gbm"] = {
                             "type": "price",
                             "predicted_close": pred_close,
-                            "predicted_high": pred_close * 1.02,
-                            "predicted_low": pred_close * 0.98,
+                            "predicted_high": pred_close + gbm_range,
+                            "predicted_low": pred_close - gbm_range,
                         }
                 except Exception as e:
                     logger.error(f"GBM failed for {symbol}: {e}")
@@ -286,8 +429,9 @@ def run_pipeline(
                 from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance
                 signals_df = compute_signals(df)
                 supports, resistances = compute_support_resistance(df)
-                support = supports[0] if supports else current_price * 0.95
-                resistance = resistances[0] if resistances else current_price * 1.05
+                sr_fallback = symbol_atr * 2 if symbol_atr > 0 else current_price * 0.03
+                support = supports[0] if supports else current_price - sr_fallback
+                resistance = resistances[0] if resistances else current_price + sr_fallback
                 if not signals_df.empty:
                     last_signal = float(signals_df["signal_strength"].iloc[-1])
                     engine_results["technical"] = {
@@ -313,8 +457,9 @@ def run_pipeline(
         combined = combiner.combine(engine_results)
 
         # Calculate targets
-        support = engine_results.get("technical", {}).get("support", current_price * 0.95)
-        resistance = engine_results.get("technical", {}).get("resistance", current_price * 1.05)
+        sr_fb = symbol_atr * 2 if symbol_atr > 0 else current_price * 0.03
+        support = engine_results.get("technical", {}).get("support", current_price - sr_fb)
+        resistance = engine_results.get("technical", {}).get("resistance", current_price + sr_fb)
         levels = SupportResistance(support=support, resistance=resistance)
 
         target = calculator.calculate(
@@ -322,7 +467,10 @@ def run_pipeline(
             signal=combined,
             current_price=current_price,
             levels=levels,
-            horizon_days=pred_len,
+            atr=symbol_atr,
+            horizon_days=trading_params.horizon_days,
+            asset_type=sym_type,
+            trading_params=trading_params,
         )
 
         all_targets.append(target)

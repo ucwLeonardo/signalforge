@@ -47,11 +47,18 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 ### Ensemble & Targets
 - `ensemble/combiner.py`: Weighted signal fusion with dynamic re-normalization
 - `ensemble/targets.py`: BUY/SELL/HOLD with entry, target, stop-loss, R:R ratio
+- **Asset-aware trading params** (`config.py: TradingParams`): Per-asset-class stop/target/horizon
+  - Stocks: horizon=5d, stop=[1.5%,8%], target=[2%,12%], ATR×1.5 stop / ATR×2.5 target
+  - Crypto: horizon=3d, stop=[3%,15%], target=[4%,25%], ATR×1.0 stop / ATR×2.0 target
+- **Entry = market price**: Signals provide direction + confidence, not precise entry points
+- **Stop/target rescaling**: Auto Build recalculates stop/target from actual entry price, preserving R:R ratio
 
 ### Paper Trading
 - HTTP server (`paper/server.py`) serving single-file dashboard (`paper/dashboard.html`)
 - Multi-account with per-account asset categories (stored in portfolio JSON, editable via modal)
-- **Auto Build**: Stratified selection (each asset class gets ≥1 slot) → Half-Kelly allocation → positions opened at real-time market price
+- **Auto Build**: Stratified selection (each asset class gets ≥1 slot) → Half-Kelly allocation → positions opened at real-time market price → stop/target rescaled to actual entry
+  - Clears value history on build for clean chart; dedup snapshots to avoid duplicate data points
+  - Progress timer shown on button during live price fetch
 - **Signal Cache**: Per-account JSON persistence (`signal_cache.py`), survives server restart. Separate full/watchlist caches per account
 - **Price Fetching** (`prices.py`): Proxy-aware with auto-detection (env vars → Clash 7897/7890)
   - Crypto fallback chain: CoinGecko (primary, no geo-block) → Binance → Polygon prev close

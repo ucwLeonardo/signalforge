@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 from loguru import logger
@@ -13,6 +15,7 @@ from signalforge.data.store import DataStore
 
 _FETCH_TIMEOUT = 90  # seconds — must exceed rate limit window (60s) + network time
 _CONSECUTIVE_FAIL_THRESHOLD = 10  # skip network after N consecutive failures
+_EMPTY_SYMBOL_CACHE_DAYS = 7  # skip symbols that returned 0 bars for this many days
 
 
 class IncrementalFetcher:
@@ -22,6 +25,7 @@ class IncrementalFetcher:
     Subsequent calls only fetch bars after the last cached timestamp.
     Tracks consecutive failures and stops attempting network fetches
     when the network appears unavailable.
+    Remembers symbols that returned 0 bars to avoid wasting API calls.
     """
 
     def __init__(
@@ -34,6 +38,41 @@ class IncrementalFetcher:
         self._network_disabled = False
         self._cancel_flag = cancel_flag
         self.last_fetch_source: str = ""  # "cache", "incremental", "full", "cache_fallback"
+        self._empty_cache_path = Path(store._root) / "empty_symbols.json"
+        self._empty_symbols: dict[str, str] = self._load_empty_cache()
+
+    def _load_empty_cache(self) -> dict[str, str]:
+        """Load the empty-symbol cache from disk."""
+        if self._empty_cache_path.exists():
+            try:
+                return json.loads(self._empty_cache_path.read_text())
+            except Exception:
+                return {}
+        return {}
+
+    def _save_empty_cache(self) -> None:
+        """Persist the empty-symbol cache to disk."""
+        try:
+            self._empty_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self._empty_cache_path.write_text(json.dumps(self._empty_symbols))
+        except Exception as exc:
+            logger.warning("Failed to save empty-symbol cache: {}", exc)
+
+    def _is_known_empty(self, symbol: str) -> bool:
+        """Check if a symbol is known to return 0 bars recently."""
+        recorded = self._empty_symbols.get(symbol)
+        if not recorded:
+            return False
+        try:
+            recorded_date = datetime.fromisoformat(recorded)
+            return (datetime.now() - recorded_date).days < _EMPTY_SYMBOL_CACHE_DAYS
+        except Exception:
+            return False
+
+    def _mark_empty(self, symbol: str) -> None:
+        """Record that a symbol returned 0 bars."""
+        self._empty_symbols[symbol] = datetime.now().isoformat()
+        self._save_empty_cache()
 
     def fetch(
         self,
@@ -48,15 +87,37 @@ class IncrementalFetcher:
         now = datetime.now()
         cached = self._store.load(symbol, interval)
 
+        # Fast path: known-empty symbol — skip network call entirely
+        if cached.empty and self._is_known_empty(symbol):
+            logger.debug("{} ({}) known empty, skipping network call", symbol, interval)
+            self.last_fetch_source = "empty_skip"
+            return pd.DataFrame()
+
         # Fast path: cache is fresh — no network needed
-        # Daily bars have timestamps at 00:00, so yesterday's bar is age_days=1.
-        # Use interval-aware thresholds: daily allows up to 4 days (handles weekends).
+        # For daily bars: stocks must have the most recent trading day's bar;
+        # crypto is more relaxed (live prices handle freshness in the pipeline).
         if not cached.empty:
             last_ts = pd.Timestamp(cached["timestamp"].max())
-            age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
-            max_age = 4 if interval in ("1d", "1D", "daily") else 1
-            if age_days <= max_age:
-                logger.debug("{} ({}) cache is fresh ({} days old), skipping fetch", symbol, interval, age_days)
+            if interval in ("1d", "1D", "daily"):
+                from signalforge.data.calendar import last_trading_day
+                last_bar_date = last_ts.to_pydatetime().date()
+                if last_ts.tzinfo is not None:
+                    last_bar_date = last_ts.tz_convert("UTC").date()
+                is_crypto = "/" in symbol
+                if is_crypto:
+                    # Crypto: daily bars are for model training; allow up to 2 days
+                    age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
+                    cache_fresh = age_days <= 2
+                else:
+                    # Stocks/futures: must have the most recent trading day's bar
+                    expected = last_trading_day()
+                    cache_fresh = last_bar_date >= expected
+            else:
+                age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
+                cache_fresh = age_days <= 1
+
+            if cache_fresh:
+                logger.debug("{} ({}) cache is fresh, skipping fetch", symbol, interval)
                 self.last_fetch_source = "cache"
                 return cached
 
@@ -86,6 +147,9 @@ class IncrementalFetcher:
                 return df
             if not is_rate_limit:
                 self._record_failure()
+                if df is not None and df.empty:
+                    # API returned successfully but with 0 bars — remember this
+                    self._mark_empty(symbol)
             self.last_fetch_source = ""
             return pd.DataFrame()
 

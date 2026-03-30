@@ -164,16 +164,30 @@ def _background_price_updater(account_manager: AccountManager) -> None:
 
 
 def _append_snapshot(manager: PortfolioManager) -> None:
-    """Append a value snapshot to the history file."""
+    """Append a value snapshot to the history file.
+
+    Deduplicates: skips if total_value and positions_value are identical to the
+    last recorded snapshot (avoids flat duplicate lines on the chart).
+    """
     portfolio = manager.load()
-    snapshot = {
-        "timestamp": datetime.now().isoformat(),
-        "total_value": round(portfolio.total_value, 2),
-        "cash": round(portfolio.cash, 2),
-        "positions_value": round(portfolio.positions_value, 2),
-    }
+    total_val = round(portfolio.total_value, 2)
+    pos_val = round(portfolio.positions_value, 2)
+    cash_val = round(portfolio.cash, 2)
+
     history = _load_history(manager.path)
-    history.append(snapshot)
+
+    # Skip if unchanged from last snapshot
+    if history:
+        last = history[-1]
+        if last.get("total_value") == total_val and last.get("positions_value") == pos_val:
+            return
+
+    history.append({
+        "timestamp": datetime.now().isoformat(),
+        "total_value": total_val,
+        "cash": cash_val,
+        "positions_value": pos_val,
+    })
     _save_history(manager.path, history)
 
 
@@ -272,6 +286,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             # /api/update-prices removed — background thread handles this
             "/api/accounts/create": self._handle_account_create,
             "/api/accounts/reset": self._handle_account_reset,
+            "/api/accounts/deposit": self._handle_account_deposit,
             "/api/accounts/delete": self._handle_account_delete,
             "/api/accounts/categories": self._handle_account_categories,
             "/api/auto-build": self._handle_auto_build,
@@ -299,6 +314,12 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         portfolio = manager.load()
         _append_snapshot(manager)
         history = sorted(_load_history(manager.path), key=lambda h: h.get("timestamp", ""))
+        # Estimate total fees: opening fees already paid + projected closing fees
+        from signalforge.paper.portfolio import TRANSACTION_FEE_RATE
+        open_fees = sum(p.cost_basis * TRANSACTION_FEE_RATE for p in portfolio.positions)
+        close_fees = sum(p.market_value * TRANSACTION_FEE_RATE for p in portfolio.positions)
+        total_fees = round(open_fees + close_fees, 2)
+
         self._send_json({
             "cash": round(portfolio.cash, 2),
             "initial_balance": round(portfolio.initial_balance, 2),
@@ -308,6 +329,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "positions_value": round(portfolio.positions_value, 2),
             "realized_pnl": round(portfolio.realized_pnl, 2),
             "unrealized_pnl": round(portfolio.unrealized_pnl, 2),
+            "total_fees": total_fees,
             "positions": [p.to_dict() for p in portfolio.positions],
             "created_at": portfolio.created_at.isoformat(),
             "asset_categories": portfolio.asset_categories,
@@ -593,6 +615,27 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
 
+    def _handle_account_deposit(self, params: dict[str, str]) -> None:
+        """Deposit funds into an account. Body: {name, amount}"""
+        try:
+            body = self._read_body()
+            name = body.get("name", "").strip()
+            if not name:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "Missing field: name")
+                return
+            amount = body.get("amount")
+            if amount is None:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, "Missing field: amount")
+                return
+            amount = float(amount)
+            am = self.__class__.account_manager
+            am.deposit(name, amount)
+            self._send_json(am.get_account_summary(name))
+        except (ValueError, FileExistsError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+        except (json.JSONDecodeError, TypeError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")
+
     def _handle_account_delete(self, params: dict[str, str]) -> None:
         """Delete an account. Body: {name}"""
         try:
@@ -854,6 +897,9 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             portfolio = manager.load()
             categories = portfolio.asset_categories or ["us_stocks", "crypto"]
 
+            # Clear value history before building — fresh chart from build moment
+            _save_history(manager.path, [])
+
             result = build_from_cached_signals(
                 manager=manager,
                 cached_signals=cached_signals,
@@ -864,6 +910,9 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             if "error" in result and not result.get("positions_opened"):
                 self._send_error_json(HTTPStatus.BAD_REQUEST, result["error"])
                 return
+
+            # Record initial snapshot right after build
+            _append_snapshot(manager)
             self._send_json(result)
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, f"Invalid request: {exc}")

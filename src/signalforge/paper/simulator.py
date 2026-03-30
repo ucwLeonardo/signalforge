@@ -8,6 +8,36 @@ import sys
 from signalforge.data.models import TradeAction, TradeTarget
 
 
+def _rescale_stop_target(
+    signal_entry: float,
+    signal_stop: float,
+    signal_target: float,
+    actual_entry: float,
+    side: str,
+) -> tuple[float, float]:
+    """Recalculate stop/target based on actual entry price.
+
+    Preserves the percentage distances from the original signal so that
+    risk/reward ratio stays the same regardless of entry price drift.
+    """
+    if signal_entry <= 0:
+        return signal_stop, signal_target
+
+    if side == "long":
+        stop_pct = (signal_entry - signal_stop) / signal_entry
+        target_pct = (signal_target - signal_entry) / signal_entry
+        actual_stop = round(actual_entry * (1 - stop_pct), 6)
+        actual_target = round(actual_entry * (1 + target_pct), 6)
+    else:
+        # Short: stop is above entry, target is below
+        stop_pct = (signal_stop - signal_entry) / signal_entry
+        target_pct = (signal_entry - signal_target) / signal_entry
+        actual_stop = round(actual_entry * (1 + stop_pct), 6)
+        actual_target = round(actual_entry * (1 - target_pct), 6)
+
+    return actual_stop, actual_target
+
+
 def _fetch_live_prices_for_build(symbols: list[str]) -> dict[str, float]:
     """Fetch current market prices at build time for accurate entry pricing.
 
@@ -167,8 +197,8 @@ def filter_signals_by_categories(
 
 def _kelly_allocate(
     signals: list[TradeTarget],
-    total_budget_pct: float = 80.0,
-    max_single_pct: float = 30.0,
+    total_budget_pct: float = 92.0,
+    max_single_pct: float = 35.0,
 ) -> dict[str, float]:
     """Allocate using a half-Kelly criterion based on signal confidence and R:R.
 
@@ -179,7 +209,7 @@ def _kelly_allocate(
     the Kelly criterion, adapted for trading signals.
 
     We use half-Kelly (f/2) for conservatism, then normalize so total
-    allocation = total_budget_pct (default 80%, keeping 20% cash reserve).
+    allocation = total_budget_pct (default 92%, keeping 8% cash reserve).
 
     Both BUY and SELL signals share the same Kelly-weighted pool.
     Each position is capped at max_single_pct.
@@ -266,17 +296,22 @@ def build_from_cached_signals(
     categories: list[str],
     top_n: int = 5,
 ) -> dict:
-    """Build portfolio from pre-scanned signals — no re-scanning needed.
+    """Build/rebalance portfolio from pre-scanned signals.
 
     Uses stratified selection for cross-asset diversification,
     then allocates via half-Kelly criterion.
 
-    Returns a summary dict including allocation preview and opened positions.
+    Rebalance logic:
+    - New signals not in portfolio → open new position
+    - Existing positions in new signals → add or reduce to match target allocation
+    - Existing positions NOT in new signals → close entirely
+
+    Returns a summary dict including allocation preview and actions taken.
     """
     from signalforge.paper.portfolio import PortfolioManager
 
     portfolio = manager.load()
-    balance = portfolio.cash
+    total_value = portfolio.total_value  # cash + positions value
 
     # Filter by account categories
     filtered = filter_signals_by_categories(cached_signals, categories)
@@ -286,55 +321,137 @@ def build_from_cached_signals(
     # Stratified selection: diversify across categories, then fill by confidence
     signals = _stratified_select(filtered, categories, top_n)
 
-    # Allocate via half-Kelly
+    # Allocate via half-Kelly based on total portfolio value (not just cash)
     allocation = _kelly_allocate(signals)
     if not allocation:
         return {"error": "Could not determine allocation", "positions_opened": []}
 
-    # Fetch real-time prices for selected symbols (market order simulation)
-    live_prices = _fetch_live_prices_for_build([s.symbol for s in signals])
+    # Fetch real-time prices for all relevant symbols
+    existing_symbols = {p.symbol for p in portfolio.positions}
+    all_symbols = list({s.symbol for s in signals} | existing_symbols)
+    live_prices = _fetch_live_prices_for_build(all_symbols)
 
-    # Open positions using real-time prices (not stale signal entry_price)
+    selected_symbols = {s.symbol for s in signals}
+
+    # Phase 1: Close positions that are NOT in the new signal set
+    closed = []
+    for pos in list(portfolio.positions):
+        if pos.symbol not in selected_symbols:
+            price = live_prices.get(pos.symbol, pos.current_price)
+            try:
+                manager.close_position(pos.symbol, price, reason="rebalance")
+                closed.append({"symbol": pos.symbol, "side": pos.side,
+                               "qty": pos.qty, "exit_price": price})
+            except ValueError:
+                pass
+
+    # Reload after closes to get updated cash
+    portfolio = manager.load()
+    total_value = portfolio.total_value
+    existing_map = {p.symbol: p for p in portfolio.positions}
+
+    # Phase 2: Rebalance existing + open new
     opened = []
+    added = []
+    reduced = []
     errors = []
+
     for signal in signals:
         pct = allocation.get(signal.symbol)
         if not pct or pct <= 0:
             continue
 
-        # Use live price if available, fall back to signal entry_price
-        entry = live_prices.get(signal.symbol, signal.entry_price)
-        if entry <= 0:
+        price = live_prices.get(signal.symbol, signal.entry_price)
+        if price <= 0:
             continue
 
-        amount = balance * (pct / 100)
-        raw_qty = amount / entry
+        target_value = total_value * (pct / 100)
         is_crypto = "/" in signal.symbol
-        qty = round(raw_qty, 6) if is_crypto else int(raw_qty)
-        if qty <= 0:
-            continue
-
         side = "short" if signal.action == TradeAction.SELL else "long"
-        try:
-            pos = manager.open_position(
-                symbol=signal.symbol,
+
+        if signal.symbol in existing_map:
+            # Existing position — adjust size
+            pos = existing_map[signal.symbol]
+            current_value = pos.qty * price
+
+            if pos.side != side:
+                # Direction flipped — close old, open new
+                try:
+                    manager.close_position(pos.symbol, price, reason="rebalance_flip")
+                    closed.append({"symbol": pos.symbol, "side": pos.side,
+                                   "qty": pos.qty, "exit_price": price})
+                except ValueError as exc:
+                    errors.append({"symbol": signal.symbol, "error": str(exc)})
+                    continue
+                # Reload and fall through to open new
+                portfolio = manager.load()
+                total_value = portfolio.total_value
+                target_value = total_value * (pct / 100)
+                del existing_map[signal.symbol]
+            else:
+                diff_value = target_value - current_value
+                if diff_value > price * (0.5 if is_crypto else 1):
+                    # Need to add — buy more
+                    qty_add = diff_value / price
+                    qty_add = round(qty_add, 6) if is_crypto else int(qty_add)
+                    if qty_add > 0:
+                        try:
+                            manager.add_to_position(signal.symbol, qty_add, price)
+                            added.append({"symbol": signal.symbol, "qty_added": qty_add,
+                                          "price": price, "cost": round(qty_add * price, 2)})
+                        except ValueError as exc:
+                            errors.append({"symbol": signal.symbol, "error": str(exc)})
+                    continue
+                elif diff_value < -price * (0.5 if is_crypto else 1):
+                    # Need to reduce — sell some
+                    qty_reduce = abs(diff_value) / price
+                    qty_reduce = round(qty_reduce, 6) if is_crypto else int(qty_reduce)
+                    if qty_reduce > 0:
+                        try:
+                            manager.reduce_position(signal.symbol, qty_reduce, price, reason="rebalance")
+                            reduced.append({"symbol": signal.symbol, "qty_reduced": qty_reduce,
+                                            "price": price, "proceeds": round(qty_reduce * price, 2)})
+                        except ValueError as exc:
+                            errors.append({"symbol": signal.symbol, "error": str(exc)})
+                    continue
+                else:
+                    # Close enough — no action needed
+                    continue
+
+        # New position — open fresh
+        if signal.symbol not in existing_map:
+            raw_qty = target_value / price
+            # Crypto: 6 decimal places; stocks/futures: 2 decimals (fractional shares for paper)
+            qty = round(raw_qty, 6) if is_crypto else round(raw_qty, 2)
+            if qty <= 0:
+                continue
+
+            # Recalculate stop/target based on actual entry price (not signal's entry).
+            # Preserve the percentage distances from the signal.
+            actual_stop, actual_target = _rescale_stop_target(
+                signal_entry=signal.entry_price,
+                signal_stop=signal.stop_loss,
+                signal_target=signal.target_price,
+                actual_entry=price,
                 side=side,
-                qty=qty,
-                entry_price=entry,
-                stop_loss=signal.stop_loss,
-                target_price=signal.target_price,
             )
-            opened.append({
-                "symbol": pos.symbol,
-                "side": side,
-                "qty": pos.qty,
-                "entry_price": entry,
-                "signal_entry": signal.entry_price,
-                "allocation_pct": pct,
-                "cost": round(qty * entry, 2),
-            })
-        except ValueError as exc:
-            errors.append({"symbol": signal.symbol, "error": str(exc)})
+
+            try:
+                pos = manager.open_position(
+                    symbol=signal.symbol,
+                    side=side,
+                    qty=qty,
+                    entry_price=price,
+                    stop_loss=actual_stop,
+                    target_price=actual_target,
+                )
+                opened.append({
+                    "symbol": pos.symbol, "side": side, "qty": pos.qty,
+                    "entry_price": price, "signal_entry": signal.entry_price,
+                    "allocation_pct": pct, "cost": round(qty * price, 2),
+                })
+            except ValueError as exc:
+                errors.append({"symbol": signal.symbol, "error": str(exc)})
 
     portfolio = manager.load()
 
@@ -346,9 +463,12 @@ def build_from_cached_signals(
 
     return {
         "allocation_method": "half_kelly",
-        "selection_method": "stratified",
+        "selection_method": "stratified_rebalance",
         "allocation": allocation,
         "positions_opened": opened,
+        "positions_added": added,
+        "positions_reduced": reduced,
+        "positions_closed": closed,
         "errors": errors,
         "signals_considered": len(filtered),
         "signals_selected": len(signals),
@@ -407,7 +527,7 @@ def auto_build_portfolio(
         # Calculate quantity
         raw_qty = amount / entry
         is_crypto = "/" in signal.symbol
-        qty = round(raw_qty, 6) if is_crypto else int(raw_qty)
+        qty = round(raw_qty, 6) if is_crypto else round(raw_qty, 2)
         if qty <= 0:
             continue
 

@@ -87,6 +87,22 @@ class PortfolioManager:
         if history_path.exists():
             history_path.unlink()
 
+    def deposit(self, amount: float) -> Portfolio:
+        """Add funds to the account."""
+        if amount <= 0:
+            raise ValueError("Deposit amount must be positive")
+        portfolio = self.load()
+        portfolio = Portfolio(
+            cash=portfolio.cash + amount,
+            positions=portfolio.positions,
+            trades=portfolio.trades,
+            initial_balance=portfolio.initial_balance + amount,
+            created_at=portfolio.created_at,
+            asset_categories=portfolio.asset_categories,
+        )
+        self._save(portfolio)
+        return portfolio
+
     def reset(self, balance: float | None = None) -> Portfolio:
         """Reset portfolio to initial state. Uses stored initial_balance if no balance given."""
         old_categories: list[str] | None = None
@@ -169,6 +185,88 @@ class PortfolioManager:
         portfolio.positions.append(position)
         self._save(portfolio)
         return position
+
+    def add_to_position(
+        self,
+        symbol: str,
+        qty_add: float,
+        price: float,
+    ) -> Position:
+        """Add to an existing position (加仓). Deducts cost + fee from cash.
+        Entry price becomes volume-weighted average."""
+        portfolio = self.load()
+        pos = None
+        pos_idx = -1
+        for i, p in enumerate(portfolio.positions):
+            if p.symbol == symbol:
+                pos = p
+                pos_idx = i
+                break
+        if pos is None:
+            raise ValueError(f"No open position for {symbol}")
+
+        cost = qty_add * price
+        fee = cost * TRANSACTION_FEE_RATE
+        if cost + fee > portfolio.cash:
+            raise ValueError(
+                f"Insufficient cash: need ${cost + fee:.2f}, have ${portfolio.cash:.2f}"
+            )
+
+        # Volume-weighted average entry price
+        old_value = pos.qty * pos.entry_price
+        new_value = qty_add * price
+        new_qty = pos.qty + qty_add
+        avg_entry = (old_value + new_value) / new_qty if new_qty > 0 else price
+
+        updated = replace(pos, qty=new_qty, entry_price=round(avg_entry, 6), current_price=price)
+        portfolio.positions[pos_idx] = updated
+        portfolio.cash -= (cost + fee)
+        self._save(portfolio)
+        return updated
+
+    def reduce_position(
+        self,
+        symbol: str,
+        qty_reduce: float,
+        price: float,
+        reason: str = "rebalance",
+    ) -> Trade | None:
+        """Reduce (partial close) an existing position. If qty_reduce >= current qty, fully close."""
+        portfolio = self.load()
+        pos = None
+        pos_idx = -1
+        for i, p in enumerate(portfolio.positions):
+            if p.symbol == symbol:
+                pos = p
+                pos_idx = i
+                break
+        if pos is None:
+            raise ValueError(f"No open position for {symbol}")
+
+        if qty_reduce >= pos.qty:
+            # Full close
+            return self.close_position(symbol, price, reason=reason)
+
+        # Partial close — record a trade for the reduced portion
+        proceeds = qty_reduce * price
+        fee = proceeds * TRANSACTION_FEE_RATE
+        trade = Trade(
+            symbol=pos.symbol,
+            side=pos.side,
+            qty=qty_reduce,
+            entry_price=pos.entry_price,
+            exit_price=price,
+            opened_at=pos.opened_at,
+            closed_at=datetime.now(),
+            reason=reason,
+        )
+        remaining_qty = pos.qty - qty_reduce
+        updated = replace(pos, qty=remaining_qty, current_price=price)
+        portfolio.positions[pos_idx] = updated
+        portfolio.cash += proceeds - fee
+        portfolio.trades.append(trade)
+        self._save(portfolio)
+        return trade
 
     def close_position(
         self,
@@ -285,6 +383,13 @@ class AccountManager:
         """Reset an account to initial state."""
         mgr = self.get_manager(name)
         return mgr.reset(balance=balance)
+
+    def deposit(self, name: str, amount: float) -> Portfolio:
+        """Add funds to an account."""
+        mgr = self.get_manager(name)
+        if not mgr.exists():
+            raise ValueError(f"Account '{name}' does not exist")
+        return mgr.deposit(amount)
 
     def get_account_summary(self, name: str) -> dict:
         """Return a summary dict for one account."""

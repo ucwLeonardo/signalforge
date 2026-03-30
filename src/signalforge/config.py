@@ -32,6 +32,60 @@ def _expand_env_vars(obj: Any) -> Any:
 
 
 @dataclass(frozen=True)
+class TradingParams:
+    """Per-asset-class parameters for stop-loss, target, and horizon."""
+
+    horizon_days: int = 5
+    atr_stop_multiplier: float = 1.5
+    atr_target_multiplier: float = 2.5
+    min_stop_pct: float = 0.015       # 1.5%
+    max_stop_pct: float = 0.08        # 8%
+    min_target_pct: float = 0.02      # 2%
+    max_target_pct: float = 0.12      # 12%
+
+
+# Pre-built parameter sets per asset class
+STOCK_TRADING_PARAMS = TradingParams(
+    horizon_days=5,
+    atr_stop_multiplier=1.5,
+    atr_target_multiplier=2.5,
+    min_stop_pct=0.015,
+    max_stop_pct=0.08,
+    min_target_pct=0.02,
+    max_target_pct=0.12,
+)
+
+CRYPTO_TRADING_PARAMS = TradingParams(
+    horizon_days=3,
+    atr_stop_multiplier=1.0,
+    atr_target_multiplier=2.0,
+    min_stop_pct=0.03,
+    max_stop_pct=0.15,
+    min_target_pct=0.04,
+    max_target_pct=0.25,
+)
+
+FUTURES_TRADING_PARAMS = TradingParams(
+    horizon_days=5,
+    atr_stop_multiplier=1.5,
+    atr_target_multiplier=2.5,
+    min_stop_pct=0.015,
+    max_stop_pct=0.08,
+    min_target_pct=0.02,
+    max_target_pct=0.12,
+)
+
+
+def get_trading_params(asset_type: str) -> TradingParams:
+    """Return trading parameters for the given asset type."""
+    if asset_type == "crypto":
+        return CRYPTO_TRADING_PARAMS
+    if asset_type == "futures":
+        return FUTURES_TRADING_PARAMS
+    return STOCK_TRADING_PARAMS
+
+
+@dataclass(frozen=True)
 class KronosConfig:
     enabled: bool = True
     model: str = "NeoQuasar/Kronos-base"
