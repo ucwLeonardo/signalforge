@@ -1285,6 +1285,7 @@
   let currentAccount = sessionStorage.getItem('sf_account') || 'default';
   let minConfidence = parseInt(sessionStorage.getItem('sf_minConf')) || 50;
   let signalTypeFilter = sessionStorage.getItem('sf_signalType') || 'all'; // 'all', 'stocks', 'crypto', 'futures'
+  let savedTopN = sessionStorage.getItem('sf_topN');
 
   // --- Custom Confirm Modal ---
   let _confirmResolveFn = null;
@@ -2637,6 +2638,15 @@
   })();
 
   // --- Init ---
+  // Restore persisted Top N value
+  if (savedTopN) {
+    var topNEl = document.getElementById('build-top-n');
+    if (topNEl) topNEl.value = savedTopN;
+  }
+  document.getElementById('build-top-n').addEventListener('change', function() {
+    sessionStorage.setItem('sf_topN', this.value);
+  });
+
   // Auto-refresh every 30s to pick up server-side price updates
   refreshAll();
   setInterval(function() { refreshAll(); }, 30000);

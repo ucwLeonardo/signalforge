@@ -510,32 +510,52 @@ def fetch_prices(symbols: list[str]) -> dict[str, float]:
 
     prices: dict[str, float] = {}
 
-    if crypto_syms:
-        # Fallback chain: CoinGecko → Binance → Polygon
+    # Fetch crypto and stock/option prices in parallel
+    import concurrent.futures
+
+    def _fetch_crypto_chain() -> dict[str, float]:
+        """CoinGecko → Binance → Polygon fallback chain."""
+        result: dict[str, float] = {}
+        if not crypto_syms:
+            return result
         cg_prices = _fetch_coingecko_prices(crypto_syms)
-        prices.update(cg_prices)
+        result.update(cg_prices)
 
-        missing_crypto = [s for s in crypto_syms if s not in prices]
-        if missing_crypto:
+        missing = [s for s in crypto_syms if s not in result]
+        if missing:
             sys.stderr.write(
-                f"[Prices] CoinGecko missed {len(missing_crypto)}, trying Binance...\n"
+                f"[Prices] CoinGecko missed {len(missing)}, trying Binance...\n"
             )
-            bn_prices = _fetch_binance_prices(missing_crypto)
-            prices.update(bn_prices)
+            result.update(_fetch_binance_prices(missing))
 
-        missing_crypto = [s for s in crypto_syms if s not in prices]
-        if missing_crypto:
+        missing = [s for s in crypto_syms if s not in result]
+        if missing:
             sys.stderr.write(
-                f"[Prices] Binance missed {len(missing_crypto)}, trying Polygon...\n"
+                f"[Prices] Binance missed {len(missing)}, trying Polygon...\n"
             )
-            pg_prices = _fetch_polygon_crypto_prices(missing_crypto)
-            prices.update(pg_prices)
+            result.update(_fetch_polygon_crypto_prices(missing))
+        return result
 
-    if stock_syms:
-        prices.update(_fetch_polygon_prices(stock_syms))
+    def _fetch_stock_prices() -> dict[str, float]:
+        if not stock_syms:
+            return {}
+        return _fetch_polygon_prices(stock_syms)
 
-    if option_syms:
-        prices.update(_fetch_polygon_option_prices(option_syms))
+    def _fetch_option_prices() -> dict[str, float]:
+        if not option_syms:
+            return {}
+        return _fetch_polygon_option_prices(option_syms)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        crypto_fut = pool.submit(_fetch_crypto_chain)
+        stock_fut = pool.submit(_fetch_stock_prices)
+        option_fut = pool.submit(_fetch_option_prices)
+
+        for fut in concurrent.futures.as_completed([crypto_fut, stock_fut, option_fut]):
+            try:
+                prices.update(fut.result())
+            except Exception as exc:
+                sys.stderr.write(f"[Prices] Parallel fetch error: {exc}\n")
 
     # Report missing
     missing = [s for s in symbols if s not in prices]

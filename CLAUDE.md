@@ -14,7 +14,8 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
   - Crypto: `BTC/USDT` → `X:BTCUSD` conversion
   - Futures: `ES=F` → `SPY` ETF proxy mapping
 - **IncrementalFetcher**: Cache-first with rate-limit-aware incremental updates, cancel-aware 0.5s polling
-  - Daily bar cache freshness: ≤4 days (handles weekends), compares bar count to detect actual new data
+  - Cache freshness: stocks/futures must have latest trading day's bar; crypto allows 2 days
+- **Trading Calendar** (`data/calendar.py`): NYSE holiday-aware `last_trading_day()` with market-close cutoff (UTC 22:00 = ET 18:00) — avoids marking data as stale before daily bars are available
 - **DataStore**: Parquet storage with dedup, `~/.signalforge/data/{stock,crypto,futures}/`
 - Rate limiting: 5 req/min sliding window, HTTP 429 retry, consecutive failure detection
 
@@ -56,12 +57,14 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 ### Paper Trading
 - HTTP server (`paper/server.py`) serving single-file dashboard (`paper/dashboard.html`)
 - Multi-account with per-account asset categories (stored in portfolio JSON, editable via modal)
-- **Auto Build**: Stratified selection (each asset class gets ≥1 slot) → Half-Kelly allocation → positions opened at real-time market price → stop/target rescaled to actual entry
+- **Auto Build**: Stratified selection (each asset class gets ≥1 slot, BUY+SELL unified ranking, capped at top_n total) → Half-Kelly allocation → positions opened at real-time market price → stop/target rescaled to actual entry
   - Clears value history on build for clean chart; dedup snapshots to avoid duplicate data points
-  - Progress timer shown on button during live price fetch
+  - Reuses server's background price cache; only fetches missing symbols (near-instant)
+  - Top N value persisted in sessionStorage across refreshes
 - **Signal Cache**: Per-account JSON persistence (`signal_cache.py`), survives server restart. Separate full/watchlist caches per account
 - **Price Fetching** (`prices.py`): Proxy-aware with auto-detection (env vars → Clash 7897/7890)
   - Crypto fallback chain: CoinGecko (primary, no geo-block) → Binance → Polygon prev close
+  - Parallel fetching: crypto/stock/option price requests run concurrently via ThreadPoolExecutor
   - Stocks/Futures: Polygon prev close, Options: Polygon snapshot
   - 62 CoinGecko ID mappings for major crypto tokens
 - **Background Price Updater**: Server-side thread updates ALL accounts every 30s, frontend auto-refreshes in sync

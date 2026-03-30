@@ -39,24 +39,33 @@ def _rescale_stop_target(
 
 
 def _fetch_live_prices_for_build(symbols: list[str]) -> dict[str, float]:
-    """Fetch current market prices at build time for accurate entry pricing.
+    """Get current market prices for build, reusing server's cached prices.
 
-    Raises PriceFetchError for unsupported asset types (e.g. options).
-    Logs warnings for individual fetch failures but continues.
+    Uses the background price updater cache first, only fetches missing symbols.
     """
-    from signalforge.paper.prices import fetch_prices
+    from signalforge.paper.server import _live_prices as cached_prices
 
-    prices = fetch_prices(symbols)
+    # Use cached prices from the background updater
+    prices = {s: cached_prices[s] for s in symbols if s in cached_prices}
     missing = [s for s in symbols if s not in prices]
+
     if missing:
-        sys.stderr.write(
-            f"[Build] WARNING: No live price for {', '.join(missing)} — "
-            "will fall back to signal entry_price\n"
-        )
-    else:
-        sys.stderr.write(
-            f"[Build] Fetched live prices for all {len(prices)} symbols\n"
-        )
+        # Only fetch symbols not in cache
+        from signalforge.paper.prices import fetch_prices
+
+        fresh = fetch_prices(missing)
+        prices.update(fresh)
+        still_missing = [s for s in symbols if s not in prices]
+        if still_missing:
+            sys.stderr.write(
+                f"[Build] WARNING: No live price for {', '.join(still_missing)} — "
+                "will fall back to signal entry_price\n"
+            )
+
+    sys.stderr.write(
+        f"[Build] Prices ready: {len(prices)}/{len(symbols)} "
+        f"({len(prices) - len(missing)} cached, {len(missing)} fetched)\n"
+    )
     return prices
 
 
@@ -242,24 +251,23 @@ def _stratified_select(
     """Select top N signals with cross-asset diversification.
 
     Strategy (stratified selection):
-      1. Group BUY signals by asset category.
-      2. Guarantee each category at least 1 slot (if it has signals).
+      1. Group all signals (BUY + SELL) by asset category.
+      2. Guarantee each category at least 1 slot (highest confidence, regardless of direction).
       3. Remaining slots go to the highest-confidence signals globally.
-      4. SELL signals are appended after (they use a separate short budget).
+      Total positions are capped at top_n.
 
     This ensures the portfolio isn't concentrated in one asset class
     while still prioritising the strongest signals.
     """
-    buy_signals = [s for s in signals if s.action == TradeAction.BUY]
-    sell_signals = [s for s in signals if s.action == TradeAction.SELL]
+    # Sort all signals by confidence descending
+    all_sorted = sorted(signals, key=lambda s: s.confidence, reverse=True)
 
-    # Group buys by category
+    # Group by category
     by_cat: dict[str, list[TradeTarget]] = {}
-    for s in buy_signals:
+    for s in all_sorted:
         cat = _classify_symbol_category(s.symbol)
         by_cat.setdefault(cat, []).append(s)
 
-    # Each list is already sorted by confidence desc (from scan)
     selected: list[TradeTarget] = []
     seen: set[str] = set()
 
@@ -273,19 +281,13 @@ def _stratified_select(
     # Phase 2: fill remaining slots from global ranking
     remaining = top_n - len(selected)
     if remaining > 0:
-        for s in buy_signals:
+        for s in all_sorted:
             if s.symbol not in seen:
                 selected.append(s)
                 seen.add(s.symbol)
                 remaining -= 1
                 if remaining <= 0:
                     break
-
-    # Append sell signals (separate short budget, don't count toward top_n)
-    for s in sell_signals:
-        if s.symbol not in seen:
-            selected.append(s)
-            seen.add(s.symbol)
 
     return selected
 
