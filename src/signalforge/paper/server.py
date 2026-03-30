@@ -29,6 +29,27 @@ from signalforge.paper.simulator import (
 
 import threading
 
+from signalforge.paper.prices import _classify
+
+
+def _is_us_market_hours() -> bool:
+    """Return True if US stock market is currently open (or within extended hours).
+
+    Regular session: 9:30-16:00 ET.  We use a wider window (pre-market 4:00 to
+    after-hours 20:00 ET, i.e. UTC 9:00-01:00 next day) since Polygon serves
+    extended-hours data too.
+    """
+    from datetime import timezone, timedelta
+
+    et = timezone(timedelta(hours=-4))  # US Eastern (approximate, ignores DST edge)
+    now_et = datetime.now(et)
+    # Weekend — market closed
+    if now_et.weekday() >= 5:
+        return False
+    # Extended hours window: 4:00 AM - 8:00 PM ET
+    return 4 <= now_et.hour < 20
+
+
 # Live prices cache — updated by background thread for ALL accounts
 _live_prices: dict[str, float] = {}
 _PRICE_UPDATE_INTERVAL = 30  # seconds
@@ -130,6 +151,12 @@ def _background_price_updater(account_manager: AccountManager) -> None:
             if not all_symbols:
                 continue
 
+            # Skip stock/futures outside US market hours — prices won't change
+            if not _is_us_market_hours():
+                all_symbols = {s for s in all_symbols if _classify(s) == "crypto"}
+                if not all_symbols:
+                    continue
+
             # Fetch prices once for all symbols
             prices = _fetch_live_prices(list(all_symbols))
             if not prices:
@@ -145,6 +172,7 @@ def _background_price_updater(account_manager: AccountManager) -> None:
                 if account_prices:
                     mgr = account_manager.get_manager(name)
                     mgr.update_prices(account_prices)
+                    _append_snapshot(mgr)
                     updated_accounts += 1
 
             _price_status = {
@@ -175,12 +203,6 @@ def _append_snapshot(manager: PortfolioManager) -> None:
     cash_val = round(portfolio.cash, 2)
 
     history = _load_history(manager.path)
-
-    # Skip if unchanged from last snapshot
-    if history:
-        last = history[-1]
-        if last.get("total_value") == total_val and last.get("positions_value") == pos_val:
-            return
 
     history.append({
         "timestamp": datetime.now().isoformat(),

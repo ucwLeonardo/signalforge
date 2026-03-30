@@ -76,6 +76,10 @@ class TargetCalculator:
         effective_horizon = horizon_days if horizon_days is not None else params.horizon_days
         action = _classify_action(signal.direction)
 
+        # Discard low-confidence signals — not actionable
+        if signal.confidence < 0.70 and action != TradeAction.HOLD:
+            return self._hold_target(symbol, signal, current_price, effective_horizon)
+
         if action == TradeAction.BUY:
             return self._buy_target(
                 symbol, signal, current_price, levels, effective_atr, effective_horizon, params,
