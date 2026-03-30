@@ -1558,14 +1558,12 @@
 
     var phaseNames = {discovery:'Discovering assets',data:'Fetching data',data_cached:'Data up-to-date',data_done:'Downloaded',data_skipped:'Skipped',data_error:'Fetch error',prices:'Fetching live prices',lstm:'Training LSTM',gbm:'Training GBM',technical:'Technical analysis',ensemble:'Combining signals',agents:'LLM review',done:'Signal generated',complete:'All done',starting:'Starting',cancelled:'Stopped',error:'Error'};
     var title;
-    // Display count: use min(completed, total) to prevent overshoot
-    var displayCompleted = Math.min(s.completed || 0, s.total || 0);
     if (s.stage === 'cancelled') {
-      title = 'Scan: Stopped (' + displayCompleted + '/' + s.total + ')';
+      title = 'Scan: Stopped (' + pct + '%)';
     } else if (s.stage === 'complete') {
       title = 'Scan: Complete';
     } else if (s.total > 0) {
-      title = 'Scan: ' + (phaseNames[s.stage] || s.stage) + ' (' + displayCompleted + '/' + s.total + ')';
+      title = 'Scan: ' + (phaseNames[s.stage] || s.stage) + ' (' + pct + '%)';
     } else {
       title = 'Scan: Starting...';
     }
