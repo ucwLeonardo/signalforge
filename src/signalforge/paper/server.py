@@ -821,6 +821,8 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "stage": _scan_progress.get("stage", ""),
             "detail": _scan_progress.get("detail", ""),
             "phase_pct": _scan_progress.get("phase_pct", 0),
+            "step": _scan_progress.get("step", 0),
+            "step_total": _scan_progress.get("step_total", 0),
             "error": _scan_progress.get("error"),
             "count": count,
             "scan_account": _scan_account,

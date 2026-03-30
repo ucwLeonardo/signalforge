@@ -145,10 +145,12 @@ def run_pipeline(
     _phase2_weight = 50  # engine processing
 
     def _report(completed: int, symbol: str, stage: str, detail: str = "",
-                phase_pct: float = 0.0) -> None:
+                phase_pct: float = 0.0,
+                step: int = 0, step_total: int = 0) -> None:
         """Report progress with fine-grained phase percentage.
 
         phase_pct: 0.0-100.0 overall progress across all phases.
+        step/step_total: current operation progress (e.g. 5/32 in engine phase).
         """
         if progress_cb is not None:
             progress_cb({
@@ -158,6 +160,8 @@ def run_pipeline(
                 "stage": stage,
                 "detail": detail,
                 "phase_pct": phase_pct,
+                "step": step,
+                "step_total": step_total,
             })
 
     def _cancelled() -> bool:
@@ -198,8 +202,8 @@ def run_pipeline(
         sym_type = _classify_symbol(symbol)
         sym_label = sym_type.capitalize()  # Stock, Crypto, Futures, Options
         p1_pct = (idx / max(total, 1)) * _phase1_weight
-        _report(idx, symbol, "data", f"{sym_label} · Fetching ({idx+1}/{total})...",
-                phase_pct=p1_pct)
+        _report(idx, symbol, "data", f"{sym_label} · Fetching...",
+                phase_pct=p1_pct, step=idx+1, step_total=total)
 
         try:
             lookback = _get_lookback_days(sym_type, config)
@@ -267,14 +271,14 @@ def run_pipeline(
     # ====================================================================
     live_prices: dict[str, float] = {}
     if symbol_data:
-        _report(total, "", "prices", f"Fetching live prices for {ready_count} assets...",
-                phase_pct=_phase1_weight)
+        _report(total, "", "prices", f"Fetching live prices...",
+                phase_pct=_phase1_weight, step=0, step_total=ready_count)
 
         def _on_price_progress(fetched: int, price_total: int) -> None:
             pct = _phase1_weight + (fetched / max(price_total, 1)) * _phase15_weight
             _report(total, "", "prices",
                     f"Live prices: {fetched}/{price_total} fetched...",
-                    phase_pct=pct)
+                    phase_pct=pct, step=fetched, step_total=price_total)
 
         try:
             from signalforge.paper.prices import fetch_prices
@@ -423,8 +427,9 @@ def run_pipeline(
                 if _cancelled():
                     _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
-                _report(idx, symbol, "lstm", f"Training/inference LSTM ({idx+1}/{ready_count})",
-                        phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.2)
+                _report(idx, symbol, "lstm", f"LSTM",
+                        phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.2,
+                        step=idx+1, step_total=ready_count)
                 try:
                     from signalforge.engines.lstm_engine import LSTMEngine
                     lstm_eng = LSTMEngine(config.lstm)
@@ -445,8 +450,9 @@ def run_pipeline(
                 if _cancelled():
                     _report(total, "", "cancelled", "Scan cancelled by user")
                     return all_targets
-                _report(idx, symbol, "gbm", f"Training/inference GBM ({idx+1}/{ready_count})",
-                        phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.5)
+                _report(idx, symbol, "gbm", f"GBM",
+                        phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.5,
+                        step=idx+1, step_total=ready_count)
                 try:
                     from signalforge.engines.gbm_engine import GBMEnsembleEngine
                     gbm_eng = GBMEnsembleEngine(config.gbm)
@@ -470,8 +476,9 @@ def run_pipeline(
             if _cancelled():
                 _report(total, "", "cancelled", "Scan cancelled by user")
                 return all_targets
-            _report(idx, symbol, "technical", "RSI, MACD, BBands, S/R levels",
-                    phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.7)
+            _report(idx, symbol, "technical", "RSI, MACD, BBands, S/R",
+                    phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.7,
+                    step=idx+1, step_total=ready_count)
             try:
                 from signalforge.engines.technical import TechnicalEngine, compute_signals, compute_support_resistance
                 signals_df = compute_signals(df)
@@ -498,7 +505,8 @@ def run_pipeline(
         # Combine signals
         active_engines = sorted(engine_results.keys())
         _report(idx, symbol, "ensemble", f"Combining: {', '.join(active_engines)}",
-                phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.9)
+                phase_pct=p2_sym_start + (p2_sym_end - p2_sym_start) * 0.9,
+                step=idx+1, step_total=ready_count)
         for eng_name, eng_result in engine_results.items():
             if eng_result.get("type") == "price":
                 eng_result["current_price"] = current_price
@@ -525,7 +533,8 @@ def run_pipeline(
         _report(idx + 1, symbol, "done",
                 f"{target.action.value} conf={target.confidence:.0%} "
                 f"entry=${target.entry_price:,.2f}",
-                phase_pct=p2_sym_end)
+                phase_pct=p2_sym_end,
+                step=idx+1, step_total=ready_count)
         logger.info(
             f"{symbol}: {target.action} | "
             f"Entry: {target.entry_price:.2f} | "
