@@ -247,8 +247,9 @@ def run_pipeline(
                         f"{sym_label} · {len(df)} bars, ${current_price:,.2f}",
                         phase_pct=p1_done_pct)
             elif fetch_source == "incremental":
+                new_bars = fetcher.last_new_bars if fetcher else 0
                 _report(idx, symbol, "data_done",
-                        f"{sym_label} · Fetched new bars ({len(df)} total, ${current_price:,.2f})",
+                        f"{sym_label} · Fetched +{new_bars} new bars ({len(df)} total, ${current_price:,.2f})",
                         phase_pct=p1_done_pct)
             elif fetch_source == "full":
                 _report(idx, symbol, "data_done",

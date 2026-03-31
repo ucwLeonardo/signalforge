@@ -38,6 +38,7 @@ class IncrementalFetcher:
         self._network_disabled = False
         self._cancel_flag = cancel_flag
         self.last_fetch_source: str = ""  # "cache", "incremental", "full", "cache_fallback"
+        self.last_new_bars: int = 0  # number of new bars added in last incremental fetch
         self._empty_cache_path = Path(store._root) / "empty_symbols.json"
         self._empty_symbols: dict[str, str] = self._load_empty_cache()
 
@@ -167,7 +168,8 @@ class IncrementalFetcher:
             self._consecutive_failures = 0
             self._store.save(symbol, interval, new_df, append=True)
             result = self._store.load(symbol, interval)
-            self.last_fetch_source = "incremental" if len(result) > cached_count else "cache"
+            self.last_new_bars = max(0, len(result) - cached_count)
+            self.last_fetch_source = "incremental" if self.last_new_bars > 0 else "cache"
             return result
 
         # Fetch failed or empty — return cached data
