@@ -285,10 +285,20 @@ class MassiveProvider(BaseProvider):
 # ---------------------------------------------------------------------------
 # Factory helper
 # ---------------------------------------------------------------------------
+_shared_provider: MassiveProvider | None = None
+
+
 def get_provider(symbol_or_asset: str | Asset | AssetType, **kwargs: object) -> BaseProvider:
-    """Return the MassiveProvider for any asset type.
+    """Return a shared MassiveProvider instance for any asset type.
 
     All asset types (stocks, crypto, futures) are handled by MassiveProvider
-    with internal ticker format conversion.
+    with internal ticker format conversion.  The shared instance reuses its
+    ``requests.Session`` for TCP/TLS connection pooling.
     """
-    return MassiveProvider(**kwargs)  # type: ignore[arg-type]
+    global _shared_provider
+    if kwargs:
+        # Custom kwargs → create a fresh one-off instance
+        return MassiveProvider(**kwargs)  # type: ignore[arg-type]
+    if _shared_provider is None:
+        _shared_provider = MassiveProvider()
+    return _shared_provider

@@ -188,22 +188,76 @@ def run_pipeline(
     calculator = TargetCalculator()
 
     # ====================================================================
-    # PHASE 1: Download all data first
+    # PHASE 1: Download all data (two-pass: cache first, then API)
     # ====================================================================
-    _report(0, "", "discovery", f"Phase 1: Downloading data for {total} assets...",
+    _report(0, "", "discovery", f"Phase 1: Loading data for {total} assets...",
             phase_pct=0.0)
     symbol_data: dict[str, "pd.DataFrame"] = {}  # symbol -> DataFrame
 
-    for idx, symbol in enumerate(symbols):
+    # --- Pass A: serve fresh cache instantly (no network) ---------------
+    stale_symbols: list[str] = []  # symbols needing API fetch
+    cached_count = 0
+
+    if fetcher is not None:
+        for idx, symbol in enumerate(symbols):
+            if _cancelled():
+                _report(idx, "", "cancelled", "Scan cancelled by user")
+                return []
+
+            sym_type = _classify_symbol(symbol)
+            sym_label = sym_type.capitalize()
+            df, source = fetcher.check_cache(symbol, interval)
+
+            if df is not None:
+                # Cache hit (fresh or known-empty)
+                p1_pct = ((idx + 1) / max(total, 1)) * _phase1_weight
+                if df.empty or len(df) < 30:
+                    _report(idx, symbol, "data_skipped",
+                            f"{sym_label} · Skipped (known empty)" if source == "empty_skip"
+                            else f"{sym_label} · Insufficient data ({len(df)} bars)",
+                            phase_pct=p1_pct)
+                else:
+                    quality_issue = _check_data_quality(df, symbol, sym_type)
+                    if quality_issue:
+                        _report(idx, symbol, "data_skipped",
+                                f"{sym_label} · {quality_issue}",
+                                phase_pct=p1_pct)
+                    else:
+                        current_price = float(df["close"].iloc[-1])
+                        symbol_data[symbol] = df
+                        cached_count += 1
+                        _report(idx, symbol, "data_cached",
+                                f"{sym_label} · {len(df)} bars, ${current_price:,.2f}",
+                                phase_pct=p1_pct)
+            else:
+                stale_symbols.append(symbol)
+
+        if stale_symbols:
+            stale_pct = (cached_count / max(total, 1)) * _phase1_weight
+            _report(cached_count, "", "data",
+                    f"Cache: {cached_count}/{total} ready · Fetching {len(stale_symbols)} stale...",
+                    phase_pct=stale_pct)
+
+    else:
+        # No fetcher — all symbols need full download
+        stale_symbols = list(symbols)
+
+    # --- Pass B: fetch only stale/missing symbols via API ---------------
+    for fetch_idx, symbol in enumerate(stale_symbols):
         if _cancelled():
-            _report(idx, "", "cancelled", "Scan cancelled by user")
+            _report(0, "", "cancelled", "Scan cancelled by user")
             return []
 
+        # Map back to the original index for consistent progress
+        orig_idx = symbols.index(symbol) if symbol in symbols else fetch_idx
         sym_type = _classify_symbol(symbol)
-        sym_label = sym_type.capitalize()  # Stock, Crypto, Futures, Options
-        p1_pct = (idx / max(total, 1)) * _phase1_weight
-        _report(idx, symbol, "data", f"{sym_label} · Fetching...",
-                phase_pct=p1_pct, step=idx+1, step_total=total)
+        sym_label = sym_type.capitalize()
+
+        overall_done = cached_count + fetch_idx
+        p1_pct = (overall_done / max(total, 1)) * _phase1_weight
+        _report(overall_done, symbol, "data",
+                f"{sym_label} · Fetching ({fetch_idx+1}/{len(stale_symbols)})...",
+                phase_pct=p1_pct, step=overall_done+1, step_total=total)
 
         try:
             lookback = _get_lookback_days(sym_type, config)
@@ -218,24 +272,24 @@ def run_pipeline(
                 df = provider.fetch(symbol, interval, start, end)
                 fetch_source = "full"
 
-            p1_done_pct = ((idx + 1) / max(total, 1)) * _phase1_weight
+            overall_after = cached_count + fetch_idx + 1
+            p1_done_pct = (overall_after / max(total, 1)) * _phase1_weight
             if df.empty or len(df) < 30:
                 if fetcher is not None and fetcher.last_fetch_source == "empty_skip":
-                    _report(idx, symbol, "data_skipped",
+                    _report(overall_after, symbol, "data_skipped",
                             f"{sym_label} · Skipped (known empty)",
                             phase_pct=p1_done_pct)
                 else:
                     logger.warning(f"Insufficient data for {symbol}: {len(df)} bars")
-                    _report(idx, symbol, "data_skipped",
+                    _report(overall_after, symbol, "data_skipped",
                             f"{sym_label} · Insufficient data ({len(df)} bars)",
                             phase_pct=p1_done_pct)
                 continue
 
-            # Data quality check: detect sparse/illiquid data
             quality_issue = _check_data_quality(df, symbol, sym_type)
             if quality_issue:
                 logger.warning(f"Low quality data for {symbol}: {quality_issue}")
-                _report(idx, symbol, "data_skipped",
+                _report(overall_after, symbol, "data_skipped",
                         f"{sym_label} · {quality_issue}",
                         phase_pct=p1_done_pct)
                 continue
@@ -243,23 +297,24 @@ def run_pipeline(
             current_price = float(df["close"].iloc[-1])
             symbol_data[symbol] = df
             if fetch_source in ("cache", "cache_fallback"):
-                _report(idx, symbol, "data_cached",
+                _report(overall_after, symbol, "data_cached",
                         f"{sym_label} · {len(df)} bars, ${current_price:,.2f}",
                         phase_pct=p1_done_pct)
             elif fetch_source == "incremental":
                 new_bars = fetcher.last_new_bars if fetcher else 0
-                _report(idx, symbol, "data_done",
+                _report(overall_after, symbol, "data_done",
                         f"{sym_label} · Fetched +{new_bars} new bars ({len(df)} total, ${current_price:,.2f})",
                         phase_pct=p1_done_pct)
             elif fetch_source == "full":
-                _report(idx, symbol, "data_done",
+                _report(overall_after, symbol, "data_done",
                         f"{sym_label} · Downloaded {len(df)} bars (${current_price:,.2f})",
                         phase_pct=p1_done_pct)
 
         except Exception as e:
             logger.error(f"Data fetch failed for {symbol}: {e}")
-            p1_done_pct = ((idx + 1) / max(total, 1)) * _phase1_weight
-            _report(idx, symbol, "data_error", f"{sym_label} · {e}",
+            overall_after = cached_count + fetch_idx + 1
+            p1_done_pct = (overall_after / max(total, 1)) * _phase1_weight
+            _report(overall_after, symbol, "data_error", f"{sym_label} · {e}",
                     phase_pct=p1_done_pct)
 
     ready_count = len(symbol_data)

@@ -41,6 +41,7 @@ class IncrementalFetcher:
         self.last_new_bars: int = 0  # number of new bars added in last incremental fetch
         self._empty_cache_path = Path(store._root) / "empty_symbols.json"
         self._empty_symbols: dict[str, str] = self._load_empty_cache()
+        self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     def _load_empty_cache(self) -> dict[str, str]:
         """Load the empty-symbol cache from disk."""
@@ -75,6 +76,49 @@ class IncrementalFetcher:
         self._empty_symbols[symbol] = datetime.now().isoformat()
         self._save_empty_cache()
 
+    def _is_cache_fresh(self, symbol: str, interval: str, cached: pd.DataFrame) -> bool:
+        """Check if cached data is fresh enough to skip a network fetch."""
+        if cached.empty:
+            return False
+        now = datetime.now()
+        last_ts = pd.Timestamp(cached["timestamp"].max())
+        if interval in ("1d", "1D", "daily"):
+            from signalforge.data.calendar import last_trading_day
+            last_bar_date = last_ts.to_pydatetime().date()
+            if last_ts.tzinfo is not None:
+                last_bar_date = last_ts.tz_convert("UTC").date()
+            is_crypto = "/" in symbol
+            if is_crypto:
+                age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
+                return age_days <= 2
+            else:
+                expected = last_trading_day()
+                return last_bar_date >= expected
+        else:
+            age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
+            return age_days <= 1
+
+    def check_cache(
+        self,
+        symbol: str,
+        interval: str,
+    ) -> tuple[pd.DataFrame | None, str]:
+        """Fast cache-only check — no network calls.
+
+        Returns ``(df, source)`` where *df* is the cached DataFrame if
+        usable (fresh or known-empty), or ``None`` if a network fetch is
+        needed.  *source* mirrors ``last_fetch_source`` semantics.
+        """
+        if self._is_known_empty(symbol):
+            return pd.DataFrame(), "empty_skip"
+
+        cached = self._store.load(symbol, interval)
+        if self._is_cache_fresh(symbol, interval, cached):
+            return cached, "cache"
+
+        # Cache is stale or missing — caller should use fetch()
+        return None, ""
+
     def fetch(
         self,
         symbol: str,
@@ -95,32 +139,10 @@ class IncrementalFetcher:
             return pd.DataFrame()
 
         # Fast path: cache is fresh — no network needed
-        # For daily bars: stocks must have the most recent trading day's bar;
-        # crypto is more relaxed (live prices handle freshness in the pipeline).
-        if not cached.empty:
-            last_ts = pd.Timestamp(cached["timestamp"].max())
-            if interval in ("1d", "1D", "daily"):
-                from signalforge.data.calendar import last_trading_day
-                last_bar_date = last_ts.to_pydatetime().date()
-                if last_ts.tzinfo is not None:
-                    last_bar_date = last_ts.tz_convert("UTC").date()
-                is_crypto = "/" in symbol
-                if is_crypto:
-                    # Crypto: daily bars are for model training; allow up to 2 days
-                    age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
-                    cache_fresh = age_days <= 2
-                else:
-                    # Stocks/futures: must have the most recent trading day's bar
-                    expected = last_trading_day()
-                    cache_fresh = last_bar_date >= expected
-            else:
-                age_days = (now - last_ts.to_pydatetime().replace(tzinfo=None)).days
-                cache_fresh = age_days <= 1
-
-            if cache_fresh:
-                logger.debug("{} ({}) cache is fresh, skipping fetch", symbol, interval)
-                self.last_fetch_source = "cache"
-                return cached
+        if self._is_cache_fresh(symbol, interval, cached):
+            logger.debug("{} ({}) cache is fresh, skipping fetch", symbol, interval)
+            self.last_fetch_source = "cache"
+            return cached
 
         # If network is known-down, skip fetch and return cache only
         if self._network_disabled:
@@ -201,21 +223,18 @@ class IncrementalFetcher:
         a rate-limit (HTTP 429), the second element is ``True`` so that the
         caller can avoid counting it as a real network failure.
         """
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(provider.fetch, symbol, interval, start, end)
+        future = self._pool.submit(provider.fetch, symbol, interval, start, end)
         try:
-            # Poll in 0.5s intervals so cancel_flag is checked frequently
             elapsed = 0.0
             while elapsed < _FETCH_TIMEOUT:
                 try:
-                    return future.result(timeout=0.5), False
+                    return future.result(timeout=0.1), False
                 except concurrent.futures.TimeoutError:
-                    elapsed += 0.5
+                    elapsed += 0.1
                     if self._cancel_flag is not None and self._cancel_flag():
                         logger.info("Fetch cancelled for {} ({})", symbol, interval)
                         future.cancel()
                         return None, False
-            # Overall timeout
             logger.warning(
                 "Fetch timed out after {}s for {} ({})",
                 _FETCH_TIMEOUT, symbol, interval,
@@ -233,5 +252,3 @@ class IncrementalFetcher:
                 symbol, interval, exc,
             )
             return None, False
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
