@@ -53,6 +53,7 @@ def _is_us_market_hours() -> bool:
 # Live prices cache — updated by background thread for ALL accounts
 _live_prices: dict[str, float] = {}
 _PRICE_UPDATE_INTERVAL = 30  # seconds
+_last_stock_trading_day: str | None = None  # ISO date of last fetched close
 _price_status: dict[str, Any] = {
     "last_update": None,
     "symbols_updated": 0,
@@ -152,11 +153,21 @@ def _background_price_updater(account_manager: AccountManager) -> None:
             if not all_symbols:
                 continue
 
-            # Skip stock/futures outside US market hours — prices won't change
+            # Outside US market hours: stock prev-close only changes once per
+            # trading day, so fetch stocks exactly once when last_trading_day
+            # advances (new close data available). Crypto trades 24/7 — always.
+            stock_refresh_td: str | None = None
             if not _is_us_market_hours():
-                all_symbols = {s for s in all_symbols if _classify(s) == "crypto"}
-                if not all_symbols:
-                    continue
+                from signalforge.data.calendar import last_trading_day
+                global _last_stock_trading_day
+                latest_td = last_trading_day().isoformat()
+                if _last_stock_trading_day == latest_td:
+                    # Already have this trading day's close — skip stocks
+                    all_symbols = {s for s in all_symbols if _classify(s) == "crypto"}
+                    if not all_symbols:
+                        continue
+                else:
+                    stock_refresh_td = latest_td
 
             # Fetch prices once for all symbols
             prices = _fetch_live_prices(list(all_symbols))
@@ -165,6 +176,12 @@ def _background_price_updater(account_manager: AccountManager) -> None:
 
             global _live_prices, _price_status
             _live_prices.update(prices)
+
+            # Mark stock refresh complete only when all held stocks got prices
+            if stock_refresh_td:
+                stock_held = {s for s in all_symbols if _classify(s) != "crypto"}
+                if not stock_held or stock_held.issubset(prices.keys()):
+                    _last_stock_trading_day = stock_refresh_td
 
             # Update each account's positions
             updated_accounts = 0
@@ -944,6 +961,19 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             if "error" in result and not result.get("positions_opened"):
                 self._send_error_json(HTTPStatus.BAD_REQUEST, result["error"])
                 return
+
+            # Force-refresh prices for all held positions after build.
+            # Auto Build uses Polygon prev-close which may lag for some
+            # symbols (ADRs, late-publishing tickers). A second fetch
+            # corrects any stale entry prices immediately.
+            portfolio = manager.load()
+            held = [p.symbol for p in portfolio.positions]
+            if held:
+                from signalforge.paper.prices import fetch_prices
+                fresh = fetch_prices(held)
+                if fresh:
+                    manager.update_prices(fresh)
+                    _live_prices.update(fresh)
 
             # Record initial snapshot right after build
             _append_snapshot(manager)
