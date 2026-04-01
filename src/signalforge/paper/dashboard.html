@@ -655,17 +655,21 @@
     100% { background-position: -200% 0; }
   }
 
-  /* ===== Price Change Flash ===== */
+  /* ===== Price Change Flash (text color only) ===== */
   @keyframes flash-up {
-    0% { background-color: rgba(16,185,129,0.35); }
-    100% { background-color: transparent; }
+    0%   { color: #34d399; text-shadow: 0 0 6px rgba(52,211,153,0.45); }
+    100% { color: var(--flash-rest-color); text-shadow: none; }
   }
   @keyframes flash-down {
-    0% { background-color: rgba(239,68,68,0.35); }
-    100% { background-color: transparent; }
+    0%   { color: #f87171; text-shadow: 0 0 6px rgba(248,113,113,0.45); }
+    100% { color: var(--flash-rest-color); text-shadow: none; }
   }
-  .flash-up { animation: flash-up 1.5s ease-out; }
-  .flash-down { animation: flash-down 1.5s ease-out; }
+  .flash-up, .flash-down { --flash-rest-color: var(--text-primary); animation-duration: 1.5s; animation-timing-function: ease-out; }
+  .flash-up { animation-name: flash-up; }
+  .flash-down { animation-name: flash-down; }
+  .positive.flash-up, .positive.flash-down { --flash-rest-color: var(--green); }
+  .negative.flash-up, .negative.flash-down { --flash-rest-color: var(--red); }
+  .neutral.flash-up, .neutral.flash-down { --flash-rest-color: var(--text-secondary); }
 
   /* ===== Scan Progress ===== */
   .scan-progress {
