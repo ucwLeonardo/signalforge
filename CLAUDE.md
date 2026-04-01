@@ -65,7 +65,9 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 - **Price Fetching** (`prices.py`): Proxy-aware with auto-detection (env vars → Clash 7897/7890)
   - Crypto fallback chain: CoinGecko (primary, no geo-block) → Binance → Polygon prev close
   - Parallel fetching: crypto/stock/option price requests run concurrently via ThreadPoolExecutor
-  - Stocks/Futures: Polygon prev close, Options: Polygon snapshot
+  - Stocks/Futures (market hours): Yahoo Finance (real-time intraday) → Polygon prev close fallback
+  - Stocks/Futures (off hours): Polygon prev close only
+  - Options: Polygon snapshot API
   - 66 CoinGecko ID mappings for major crypto tokens
 - **Background Price Updater**: Server-side thread updates ALL accounts every 30s, frontend auto-refreshes in sync
 - **Price Status**: `/api/price-status` endpoint for monitoring update health
@@ -78,6 +80,14 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
 - Progress log: per-symbol stages (Discovery/Cached/Data/Skipped/Error) with category labels (Stock/Crypto/Futures)
 - Cancel-aware data fetching: 0.5s polling in IncrementalFetcher for responsive stop
 - Custom confirm modals (no native browser dialogs), collapsible positions panel with summary header
+
+## Development Environment
+- **Server runs in WSL2**: User starts `signalforge paper dashboard` manually in WSL2 — never attempt to install deps or start/restart from Claude Code
+- **Claude Code runs in sandbox mode**: Sandboxed `curl`/network calls to localhost fail (connection refused)
+- **Accessing localhost:8787**:
+  1. **Playwright** (preferred for UI testing) — browser can reach localhost
+  2. **Bash with `dangerouslyDisableSandbox: true`** — for curl/API checks
+- **No external network**: External APIs (yfinance, ccxt, etc.) are blocked in sandbox. Ask user to run commands manually with `!` prefix when external data is needed
 
 ## Environment Variables
 - `MASSIVE_API_KEY` (required): Polygon/Massive API key for all market data

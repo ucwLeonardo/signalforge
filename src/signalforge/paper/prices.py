@@ -2,8 +2,9 @@
 
 Sources (with fallback chain):
   - Crypto: CoinGecko (primary, no key, no geo-block) → Binance → Polygon prev close
-  - Stocks: Polygon API prev close (same key as MassiveProvider)
-  - Futures: Polygon via ETF proxy (ES=F → SPY)
+  - Stocks (market hours): Yahoo Finance (real-time, incl. pre/post-market) → Polygon prev close fallback
+  - Stocks (off hours): Polygon prev close
+  - Futures: Polygon via ETF proxy (ES=F → SPY), same snapshot/prev-close logic
   - Options: Polygon snapshot API (O:AAPL260619C00200000)
 
 Proxy-aware: auto-detects HTTP_PROXY/HTTPS_PROXY env vars and Clash proxy.
@@ -14,6 +15,9 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -357,9 +361,89 @@ def _get_polygon_provider():
     return _polygon_provider
 
 
-def _fetch_polygon_prices(
+def _fetch_yahoo_prices(
     symbols: list[str],
-    on_price: "Callable[[dict[str, float]], None] | None" = None,
+    on_price: Callable[[dict[str, float]], None] | None = None,
+) -> dict[str, float]:
+    """Fetch real-time stock prices from Yahoo Finance.
+
+    Uses the v8 chart API.  During extended hours prefers
+    ``preMarketPrice`` / ``postMarketPrice``; falls back to
+    ``regularMarketPrice``.  No API key required.  Futures use
+    ETF proxy mapping (e.g. ES=F → SPY).
+    """
+    if not symbols:
+        return {}
+
+    from signalforge.data.providers import _FUTURES_TO_ETF
+
+    session = _get_session()
+    prices: dict[str, float] = {}
+    errors: list[str] = []
+
+    # Yahoo uses the same ticker for stocks; futures need ETF proxy mapping
+    sym_to_yahoo: dict[str, str] = {}
+    for sym in symbols:
+        if sym.endswith("=F"):
+            etf = _FUTURES_TO_ETF.get(sym)
+            if etf:
+                sym_to_yahoo[sym] = etf
+            else:
+                errors.append(f"{sym}: no ETF mapping for Yahoo")
+        else:
+            sym_to_yahoo[sym] = sym
+
+    if not sym_to_yahoo:
+        if errors:
+            sys.stderr.write(f"[Prices] Yahoo warnings: {'; '.join(errors)}\n")
+        return prices
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+    }
+
+    for sf_sym, yahoo_ticker in sym_to_yahoo.items():
+        try:
+            resp = session.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_ticker}",
+                params={"range": "1d", "interval": "1d"},
+                headers=headers,
+                timeout=8,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            chart = data.get("chart") or {}
+            results = chart.get("result") or []
+            meta = results[0].get("meta", {}) if results else {}
+            # Prefer extended-hours price when available (pre-market
+            # or post-market), fall back to regular session price.
+            price = (
+                meta.get("preMarketPrice")
+                or meta.get("postMarketPrice")
+                or meta.get("regularMarketPrice")
+            )
+            if price and float(price) > 0:
+                prices[sf_sym] = float(price)
+                if on_price is not None:
+                    on_price({sf_sym: float(price)})
+            else:
+                errors.append(f"{sf_sym}: Yahoo returned no price for {yahoo_ticker}")
+        except (requests.RequestException, ValueError, TypeError, KeyError, IndexError) as exc:
+            errors.append(f"{sf_sym}: Yahoo error: {exc}")
+
+    if errors:
+        sys.stderr.write(f"[Prices] Yahoo warnings: {'; '.join(errors)}\n")
+
+    return prices
+
+
+def _fetch_polygon_prev_close(
+    symbols: list[str],
+    on_price: Callable[[dict[str, float]], None] | None = None,
 ) -> dict[str, float]:
     """Fetch previous close from Polygon for stock/futures symbols."""
     if not symbols:
@@ -396,7 +480,7 @@ def _fetch_polygon_prices(
             errors.append(f"{sym}: Polygon error: {exc}")
 
     if errors:
-        sys.stderr.write(f"[Prices] Polygon warnings: {'; '.join(errors)}\n")
+        sys.stderr.write(f"[Prices] Polygon prev-close warnings: {'; '.join(errors)}\n")
 
     return prices
 
@@ -420,7 +504,7 @@ def _to_polygon_option_ticker(symbol: str) -> str:
 
 def _fetch_polygon_option_prices(
     symbols: list[str],
-    on_price: "Callable[[dict[str, float]], None] | None" = None,
+    on_price: Callable[[dict[str, float]], None] | None = None,
 ) -> dict[str, float]:
     """Fetch option prices from Polygon snapshot API.
 
@@ -495,16 +579,35 @@ def _fetch_polygon_option_prices(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _is_us_market_hours() -> bool:
+    """Return True if US stock market is open (including extended hours).
+
+    Regular session: 9:30-16:00 ET.  Extended window 4:00 AM - 8:00 PM ET
+    since Yahoo serves extended-hours data too.  Checks weekends and
+    NYSE holidays via the trading calendar.  Uses proper
+    America/New_York timezone (handles EST/EDT automatically).
+    """
+    from signalforge.data.calendar import _NYSE_HOLIDAYS
+
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:
+        return False
+    if now_et.date() in _NYSE_HOLIDAYS:
+        return False
+    return 4 <= now_et.hour < 20
+
+
 def fetch_prices(
     symbols: list[str],
-    progress_cb: "Callable[[int, int], None] | None" = None,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, float]:
     """Fetch current prices for a list of symbols.
 
     Routes each symbol to the correct source with fallback chain:
       - Crypto: CoinGecko (primary) → Binance → Polygon prev close
-      - Stocks: Polygon prev close
-      - Futures (ends with '=F'): Polygon via ETF proxy
+      - Stocks (market hours): Polygon snapshot (intraday) → prev close fallback
+      - Stocks (off hours): Polygon prev close
+      - Futures (ends with '=F'): same as stocks via ETF proxy
       - Options: Polygon snapshot
 
     Parameters
@@ -536,6 +639,7 @@ def fetch_prices(
     prices: dict[str, float] = {}
     total_count = len(symbols)
     _lock = threading.Lock()
+    market_open = _is_us_market_hours()
 
     def _merge_and_notify(batch: dict[str, float]) -> None:
         """Thread-safe merge of a batch of prices and progress notification."""
@@ -577,7 +681,20 @@ def fetch_prices(
     def _fetch_stock_prices() -> None:
         if not stock_syms:
             return
-        _fetch_polygon_prices(stock_syms, on_price=_merge_and_notify)
+        if market_open:
+            # Intraday: Yahoo Finance for real-time prices
+            _fetch_yahoo_prices(stock_syms, on_price=_merge_and_notify)
+            # Fall back to Polygon prev close for any symbols Yahoo missed
+            with _lock:
+                got = set(prices.keys())
+            missing = [s for s in stock_syms if s not in got]
+            if missing:
+                sys.stderr.write(
+                    f"[Prices] Yahoo missed {len(missing)}, falling back to prev close\n"
+                )
+                _fetch_polygon_prev_close(missing, on_price=_merge_and_notify)
+        else:
+            _fetch_polygon_prev_close(stock_syms, on_price=_merge_and_notify)
 
     def _fetch_option_prices() -> None:
         if not option_syms:

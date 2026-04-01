@@ -29,25 +29,7 @@ from signalforge.paper.simulator import (
 
 import threading
 
-from signalforge.paper.prices import _classify
-
-
-def _is_us_market_hours() -> bool:
-    """Return True if US stock market is currently open (or within extended hours).
-
-    Regular session: 9:30-16:00 ET.  We use a wider window (pre-market 4:00 to
-    after-hours 20:00 ET, i.e. UTC 9:00-01:00 next day) since Polygon serves
-    extended-hours data too.
-    """
-    from datetime import timezone, timedelta
-
-    et = timezone(timedelta(hours=-4))  # US Eastern (approximate, ignores DST edge)
-    now_et = datetime.now(et)
-    # Weekend — market closed
-    if now_et.weekday() >= 5:
-        return False
-    # Extended hours window: 4:00 AM - 8:00 PM ET
-    return 4 <= now_et.hour < 20
+from signalforge.paper.prices import _classify, _is_us_market_hours
 
 
 # Live prices cache — updated by background thread for ALL accounts
@@ -153,11 +135,13 @@ def _background_price_updater(account_manager: AccountManager) -> None:
             if not all_symbols:
                 continue
 
+            market_open = _is_us_market_hours()
+
             # Outside US market hours: stock prev-close only changes once per
             # trading day, so fetch stocks exactly once when last_trading_day
             # advances (new close data available). Crypto trades 24/7 — always.
             stock_refresh_td: str | None = None
-            if not _is_us_market_hours():
+            if not market_open:
                 from signalforge.data.calendar import last_trading_day
                 global _last_stock_trading_day
                 latest_td = last_trading_day().isoformat()
@@ -198,7 +182,7 @@ def _background_price_updater(account_manager: AccountManager) -> None:
                 "symbols_updated": len(prices),
                 "accounts_updated": updated_accounts,
                 "last_error": None,
-                "source": "coingecko+polygon",
+                "source": "coingecko+yahoo" if market_open else "coingecko+polygon_prevclose",
             }
             sys.stderr.write(
                 f"[Prices] Updated {len(prices)} prices for {updated_accounts} accounts\n"

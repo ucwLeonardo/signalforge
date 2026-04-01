@@ -31,4 +31,17 @@
 | #3002 | " | 🔄 | Position allocation bar: Changed from absolute element to row background gradient | ~399 |
 | #2830 | 12:38 PM | 🔵 | Root Causes Identified for Price Display and Timestamp Issues | ~422 |
 | #2829 | 12:37 PM | 🔵 | Price Fetching Architecture Investigation | ~397 |
+
+### Mar 31, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #3380 | 11:34 PM | 🔄 | Removed unused import from Yahoo price fetching function | ~225 |
+| #3379 | " | ✅ | Integrated Yahoo Finance into stock price fetching flow and status reporting | ~382 |
+| #3378 | " | 🟣 | Replaced Polygon snapshot with Yahoo Finance for free real-time stock prices | ~445 |
+| #3371 | 11:32 PM | ✅ | Enhanced price status reporting to show active data source | ~298 |
+| #3368 | 11:31 PM | 🟣 | Added real-time intraday stock price fetching via Polygon snapshot API | ~419 |
+| #3367 | " | 🔵 | Background price updater implements trading-day optimization for stock prices | ~439 |
+| #3370 | 11:29 PM | ✅ | Updated module documentation to reflect intraday stock price support | ~318 |
+| #3369 | " | 🟣 | Implemented market-hours-aware stock price fetching with automatic source switching | ~448 |
 </claude-mem-context>
