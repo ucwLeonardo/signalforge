@@ -419,13 +419,19 @@ def _fetch_yahoo_prices(
             chart = data.get("chart") or {}
             results = chart.get("result") or []
             meta = results[0].get("meta", {}) if results else {}
-            # Prefer extended-hours price when available (pre-market
-            # or post-market), fall back to regular session price.
-            price = (
-                meta.get("preMarketPrice")
-                or meta.get("postMarketPrice")
-                or meta.get("regularMarketPrice")
-            )
+            # Pick the right price field for the current session:
+            #   pre-market  4:00-9:29 ET  → preMarketPrice
+            #   regular     9:30-15:59 ET → regularMarketPrice
+            #   after-hours 16:00-19:59 ET → postMarketPrice
+            # Always fall back to regularMarketPrice.
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            hour, minute = now_et.hour, now_et.minute
+            if hour < 9 or (hour == 9 and minute < 30):
+                price = meta.get("preMarketPrice") or meta.get("regularMarketPrice")
+            elif hour >= 16:
+                price = meta.get("postMarketPrice") or meta.get("regularMarketPrice")
+            else:
+                price = meta.get("regularMarketPrice")
             if price and float(price) > 0:
                 prices[sf_sym] = float(price)
                 if on_price is not None:
