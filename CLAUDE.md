@@ -61,6 +61,13 @@ Massive API → Data Cache (Parquet) → Prediction Engines → Ensemble → Pri
   - Clears value history on build for clean chart; dedup snapshots to avoid duplicate data points
   - Reuses server's background price cache; only fetches missing symbols (near-instant)
   - Top N value persisted in sessionStorage across refreshes
+- **Pending Orders** (`pending_orders.py`): Stocks/futures queued when market closed, execute at next market open
+  - Cash escrowed via `reserved_cash` on Portfolio; `open_position(from_reserved=)` for atomic release+open
+  - `reconcile_reserved_cash()` runs every 30s cycle to fix stale state from crashes
+  - Slippage guard: skip if live price already beyond signal stop/target
+  - 48-hour expiry, crash-safe incremental persistence, per-account RLock synchronization
+  - Dashboard: pending orders card with cancel buttons, reserved cash in summary bar
+  - API: `GET /api/pending-orders`, `POST /api/pending-orders/cancel`
 - **Signal Cache**: Per-account JSON persistence (`signal_cache.py`), survives server restart. Separate full/watchlist caches per account
 - **Price Fetching** (`prices.py`): Proxy-aware with auto-detection (env vars → Clash 7897/7890)
   - Crypto fallback chain: CoinGecko (primary, no geo-block) → Binance → Polygon prev close

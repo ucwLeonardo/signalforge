@@ -132,10 +132,31 @@ def _background_price_updater(account_manager: AccountManager) -> None:
                     account_positions[name] = held
                     all_symbols.update(held)
 
+            market_open = _is_us_market_hours()
+
+            # Reconcile reserved_cash every cycle for ALL accounts
+            # (catches stale state from crashes regardless of market
+            # hours or whether the account has open positions).
+            # Execute pending orders only when market is open.
+            from signalforge.paper.pending_orders import (
+                PendingOrderManager,
+                execute_pending_orders,
+                reconcile_reserved_cash,
+            )
+
+            for name in names:
+                mgr = account_manager.get_manager(name)
+                if not mgr.exists():
+                    continue
+                pending_mgr = PendingOrderManager(mgr.path.parent)
+                reconcile_reserved_cash(mgr, pending_mgr)
+                if market_open:
+                    results = execute_pending_orders(mgr, pending_mgr)
+                    if results:
+                        _append_snapshot(mgr)
+
             if not all_symbols:
                 continue
-
-            market_open = _is_us_market_hours()
 
             # Outside US market hours: stock prev-close only changes once per
             # trading day, so fetch stocks exactly once when last_trading_day
@@ -288,6 +309,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "/api/scan/status": self._handle_scan_status,
             "/api/watchlist": self._handle_watchlist_get,
             "/api/price-status": self._handle_price_status,
+            "/api/pending-orders": self._handle_pending_orders_get,
         }
         handler = routes.get(route)
         if handler is not None:
@@ -317,6 +339,7 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "/api/scan": self._handle_scan_start,
             "/api/scan/cancel": self._handle_scan_cancel,
             "/api/watchlist": self._handle_watchlist_save,
+            "/api/pending-orders/cancel": self._handle_pending_orders_cancel,
         }
         handler = routes.get(route)
         if handler is not None:
@@ -360,8 +383,17 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             "positions": [p.to_dict() for p in portfolio.positions],
             "created_at": portfolio.created_at.isoformat(),
             "asset_categories": portfolio.asset_categories,
+            "reserved_cash": round(portfolio.reserved_cash, 2),
+            "pending_orders": self._get_pending_orders_list(manager),
             "value_history": history,
         })
+
+    @staticmethod
+    def _get_pending_orders_list(manager: PortfolioManager) -> list[dict]:
+        from signalforge.paper.pending_orders import PendingOrderManager
+
+        pending_mgr = PendingOrderManager(manager.path.parent)
+        return [o.to_dict() for o in pending_mgr.get_pending()]
 
     @staticmethod
     def _classify_symbol(symbol: str) -> str:
@@ -895,6 +927,57 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
 
         self._send_json({"status": "saved", "path": str(config_path)})
 
+    def _handle_pending_orders_get(self, params: dict[str, str]) -> None:
+        """GET /api/pending-orders — list pending orders for an account."""
+        manager = self._get_manager(params)
+        from signalforge.paper.pending_orders import PendingOrderManager
+
+        pending_mgr = PendingOrderManager(manager.path.parent)
+        orders = pending_mgr.get_pending()
+        self._send_json({
+            "pending_orders": [o.to_dict() for o in orders],
+            "count": len(orders),
+        })
+
+    def _handle_pending_orders_cancel(self, params: dict[str, str]) -> None:
+        """POST /api/pending-orders/cancel — cancel one or all pending orders.
+
+        Body: {order_id: "abc123"} or {cancel_all: true}
+        """
+        manager = self._get_manager(params)
+        from signalforge.paper.pending_orders import PendingOrderManager
+
+        pending_mgr = PendingOrderManager(manager.path.parent)
+        try:
+            body = self._read_body()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        from signalforge.paper.portfolio import account_lock
+
+        lock = account_lock(manager.path.parent)
+        if body.get("cancel_all"):
+            with lock:
+                cancelled = pending_mgr.cancel_all()
+                for o in cancelled:
+                    manager.release_cash(o.reserved_amount)
+                pending_mgr.clear_completed()
+            self._send_json({"cancelled": len(cancelled)})
+        else:
+            order_id = body.get("order_id", "")
+            with lock:
+                cancelled = pending_mgr.cancel(order_id)
+                if cancelled:
+                    manager.release_cash(cancelled.reserved_amount)
+            if cancelled:
+                self._send_json({"cancelled": 1, "order": cancelled.to_dict()})
+            else:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND,
+                    f"No pending order with id '{order_id}'",
+                )
+
     def _handle_auto_build(self, params: dict[str, str]) -> None:
         """Auto-build portfolio from cached scan signals.
 
@@ -935,11 +1018,15 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             # Clear value history before building — fresh chart from build moment
             _save_history(manager.path, [])
 
+            from signalforge.paper.pending_orders import PendingOrderManager
+
+            pending_mgr = PendingOrderManager(manager.path.parent)
             result = build_from_cached_signals(
                 manager=manager,
                 cached_signals=cached_signals,
                 categories=categories,
                 top_n=top_n,
+                pending_mgr=pending_mgr,
             )
 
             if "error" in result and not result.get("positions_opened"):

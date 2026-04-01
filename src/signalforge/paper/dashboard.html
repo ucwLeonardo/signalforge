@@ -763,6 +763,7 @@
   .toast.show { opacity: 1; transform: translateY(0); }
   .toast.success { background: var(--green); color: #0b0f14; font-weight: 600; }
   .toast.error { background: var(--red); color: #0b0f14; font-weight: 600; }
+  .toast.warning { background: #f59e0b; color: #0b0f14; font-weight: 600; }
 
   /* ===== Modal ===== */
   .modal-backdrop {
@@ -1227,6 +1228,19 @@
         <p>No open positions</p>
       </div>
     </div>
+  </div>
+
+  <!-- Pending Orders (shown only when pending orders exist) -->
+  <div class="card" id="pending-orders-card" style="display:none;">
+    <div class="card-header" style="cursor:pointer;" onclick="document.getElementById('pending-orders-container').style.display = document.getElementById('pending-orders-container').style.display === 'none' ? '' : 'none'">
+      <span class="card-header-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Pending Orders
+        <span id="pending-orders-count" class="mono" style="font-size:13px;color:#f59e0b;margin-left:8px;"></span>
+      </span>
+      <button class="btn btn-sm" style="background:#f59e0b;color:#000;font-size:0.7rem;padding:2px 8px;" onclick="event.stopPropagation();cancelAllPendingOrders()">Cancel All</button>
+    </div>
+    <div id="pending-orders-container"></div>
   </div>
 
   <!-- E) Signals -->
@@ -1899,6 +1913,7 @@
     renderSummary();
     renderChart();
     renderPositions();
+    renderPendingOrders();
     renderCategories();
     // No auto-refresh scheduling — prices are updated server-side
   }
@@ -1990,7 +2005,9 @@
     if (!portfolio) return;
     const p = portfolio;
     document.getElementById('s-total-value').textContent = fmtUsd(p.total_value);
-    document.getElementById('s-cash').textContent = fmtUsd(p.cash);
+    var cashText = fmtUsd(p.cash);
+    if (p.reserved_cash > 0) cashText += ' (' + fmtUsd(p.reserved_cash) + ' reserved)';
+    document.getElementById('s-cash').textContent = cashText;
     document.getElementById('s-positions-value').textContent = fmtUsd(p.positions_value);
 
     const pnlEl = document.getElementById('s-total-pnl');
@@ -2121,6 +2138,57 @@
     container.style.display = visible ? 'none' : '';
     toggle.classList.toggle('open', !visible);
     toggle.setAttribute('aria-expanded', !visible);
+  };
+
+  function renderPendingOrders() {
+    var card = document.getElementById('pending-orders-card');
+    var container = document.getElementById('pending-orders-container');
+    var countEl = document.getElementById('pending-orders-count');
+    var orders = (portfolio && portfolio.pending_orders) || [];
+    if (orders.length === 0) {
+      card.style.display = 'none';
+      return;
+    }
+    card.style.display = '';
+    countEl.textContent = '(' + orders.length + ')';
+    var rows = orders.map(function(o) {
+      var sideClass = o.side === 'long' ? 'pnl-pos' : 'pnl-neg';
+      var created = new Date(o.created_at).toLocaleString();
+      return '<tr>' +
+        '<td class="mono">' + escHtml(o.symbol) + '</td>' +
+        '<td class="' + sideClass + '">' + o.side.toUpperCase() + '</td>' +
+        '<td class="mono">' + o.qty + '</td>' +
+        '<td class="mono">' + fmtUsd(o.signal_entry) + '</td>' +
+        '<td class="mono">' + fmtUsd(o.reserved_amount) + '</td>' +
+        '<td style="font-size:0.75rem;color:var(--text-tertiary);">' + created + '</td>' +
+        '<td><button class="btn btn-sm" style="background:var(--red);font-size:0.65rem;padding:1px 6px;" onclick="cancelPendingOrder(\'' + o.id + '\')">Cancel</button></td>' +
+        '</tr>';
+    }).join('');
+    container.innerHTML = '<table class="positions-table" style="width:100%;"><thead><tr>' +
+      '<th>Symbol</th><th>Side</th><th>Qty</th><th>Signal Entry</th><th>Reserved</th><th>Created</th><th></th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  window.cancelPendingOrder = async function(orderId) {
+    try {
+      await apiPost('/api/pending-orders/cancel', { order_id: orderId });
+      showToast('Pending order cancelled', 'success');
+      await refreshAll();
+    } catch (e) {
+      showToast('Cancel failed: ' + e.message, 'error');
+    }
+  };
+
+  window.cancelAllPendingOrders = async function() {
+    var ok = await showConfirm('Cancel All Pending Orders', 'Cancel all pending orders and release reserved cash?', { okText: 'Cancel All' });
+    if (!ok) return;
+    try {
+      var result = await apiPost('/api/pending-orders/cancel', { cancel_all: true });
+      showToast('Cancelled ' + (result.cancelled || 0) + ' pending orders', 'success');
+      await refreshAll();
+    } catch (e) {
+      showToast('Cancel failed: ' + e.message, 'error');
+    }
   };
 
   function renderPositions() {
@@ -2653,13 +2721,15 @@
       var added = result.positions_added || [];
       var reduced = result.positions_reduced || [];
       var closed = result.positions_closed || [];
+      var pending = result.pending_orders || [];
       var parts = [];
       if (opened.length > 0) parts.push('Opened ' + opened.length + ': ' + opened.map(function(p) { return p.symbol + ' ' + fmtUsd(p.cost); }).join(', '));
       if (added.length > 0) parts.push('Added ' + added.length + ': ' + added.map(function(p) { return p.symbol + ' +' + fmtUsd(p.cost); }).join(', '));
       if (reduced.length > 0) parts.push('Reduced ' + reduced.length + ': ' + reduced.map(function(p) { return p.symbol + ' -' + fmtUsd(p.proceeds); }).join(', '));
       if (closed.length > 0) parts.push('Closed ' + closed.length + ': ' + closed.map(function(p) { return p.symbol; }).join(', '));
+      if (pending.length > 0) parts.push('Pending ' + pending.length + ' (market closed): ' + pending.map(function(p) { return p.symbol; }).join(', '));
       if (parts.length > 0) {
-        showToast(parts.join(' | '), 'success');
+        showToast(parts.join(' | '), pending.length > 0 ? 'warning' : 'success');
       } else {
         showToast('No changes needed. ' + (result.error || ''), 'error');
       }

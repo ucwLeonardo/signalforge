@@ -111,6 +111,11 @@ class Portfolio:
     initial_balance: float = 5000.0
     created_at: datetime = field(default_factory=datetime.now)
     asset_categories: list[str] = field(default_factory=lambda: ["us_stocks", "crypto"])
+    reserved_cash: float = 0.0  # escrowed for pending orders
+
+    @property
+    def available_cash(self) -> float:
+        return self.cash - self.reserved_cash
 
     @property
     def total_value(self) -> float:

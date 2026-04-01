@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import sys
 
+from loguru import logger
+
 from signalforge.data.models import TradeAction, TradeTarget
 
 
@@ -36,6 +38,51 @@ def _rescale_stop_target(
         actual_target = round(actual_entry * (1 - target_pct), 6)
 
     return actual_stop, actual_target
+
+
+MARKET_CLOSED = "market_closed"
+
+
+def _check_slippage(
+    signal: TradeTarget,
+    live_price: float,
+    side: str,
+) -> str | None:
+    """Check if a position should be skipped or deferred before opening.
+
+    Returns a reason string if the trade should NOT open immediately,
+    or None if OK.
+
+    Possible reasons:
+      - Starts with MARKET_CLOSED: stocks/futures outside market hours.
+        Caller should create a pending order instead of skipping.
+      - Other string: signal thesis is dead (price beyond stop/target).
+        Caller should skip entirely.
+    """
+    sym = signal.symbol
+    is_crypto = "/" in sym
+
+    # Gate 1: stocks/futures require market hours for realistic execution
+    if not is_crypto:
+        from signalforge.paper.prices import _is_us_market_hours
+
+        if not _is_us_market_hours():
+            return f"{MARKET_CLOSED}: US market closed — will queue as pending order"
+
+    # Gate 2: price already beyond stop or target
+    if signal.entry_price > 0 and live_price > 0:
+        if side == "long":
+            if live_price <= signal.stop_loss:
+                return f"price ${live_price:.2f} already at/below stop ${signal.stop_loss:.2f}"
+            if live_price >= signal.target_price:
+                return f"price ${live_price:.2f} already at/above target ${signal.target_price:.2f}"
+        else:  # short
+            if live_price >= signal.stop_loss:
+                return f"price ${live_price:.2f} already at/above stop ${signal.stop_loss:.2f}"
+            if live_price <= signal.target_price:
+                return f"price ${live_price:.2f} already at/below target ${signal.target_price:.2f}"
+
+    return None
 
 
 def _fetch_live_prices_for_build(symbols: list[str]) -> dict[str, float]:
@@ -299,6 +346,7 @@ def build_from_cached_signals(
     cached_signals: list[TradeTarget],
     categories: list[str],
     top_n: int = 5,
+    pending_mgr: "PendingOrderManager | None" = None,
 ) -> dict:
     """Build/rebalance portfolio from pre-scanned signals.
 
@@ -354,10 +402,21 @@ def build_from_cached_signals(
     total_value = portfolio.total_value
     existing_map = {p.symbol: p for p in portfolio.positions}
 
+    # Cancel existing pending orders for this account before rebuilding
+    if pending_mgr is not None:
+        from signalforge.paper.portfolio import account_lock
+
+        with account_lock(manager.path.parent):
+            old_pending = pending_mgr.cancel_all()
+            for op in old_pending:
+                manager.release_cash(op.reserved_amount)
+            pending_mgr.clear_completed()
+
     # Phase 2: Rebalance existing + open new
     opened = []
     added = []
     reduced = []
+    queued = []  # pending orders (market closed)
     errors = []
 
     for signal in signals:
@@ -424,6 +483,52 @@ def build_from_cached_signals(
 
         # New position — open fresh
         if signal.symbol not in existing_map:
+            # Slippage / market-hours guard
+            slip_reason = _check_slippage(signal, price, side)
+            if slip_reason:
+                if slip_reason.startswith(MARKET_CLOSED) and pending_mgr is not None:
+                    # Queue as pending order — will execute at market open
+                    raw_qty = target_value / price
+                    qty = round(raw_qty, 6) if is_crypto else round(raw_qty, 2)
+                    if qty <= 0:
+                        continue
+                    from signalforge.paper.pending_orders import create_pending_order
+                    from signalforge.paper.portfolio import _fee_for_symbol
+
+                    # Reserve based on live price (best estimate of execution cost).
+                    # Add 5% buffer for overnight gap — excess released on execution.
+                    est_fee = _fee_for_symbol(signal.symbol, qty, price)
+                    reserved = qty * price * 1.05 + est_fee
+                    order = create_pending_order(
+                        symbol=signal.symbol,
+                        side=side,
+                        qty=qty,
+                        signal_entry=signal.entry_price,
+                        signal_stop=signal.stop_loss,
+                        signal_target=signal.target_price,
+                        allocation_pct=pct,
+                        reserved_amount=reserved,
+                    )
+                    # Atomic: reserve cash + persist pending order together
+                    with account_lock(manager.path.parent):
+                        try:
+                            manager.reserve_cash(reserved)
+                        except ValueError:
+                            errors.append({"symbol": signal.symbol, "error": "insufficient cash for pending order"})
+                            continue
+                        pending_mgr.add(order)
+                    queued.append({
+                        "symbol": signal.symbol, "side": side, "qty": qty,
+                        "signal_entry": signal.entry_price,
+                        "allocation_pct": pct, "reserved": round(reserved, 2),
+                    })
+                    logger.info("Queued pending order for {} (market closed)", signal.symbol)
+                else:
+                    # Thesis dead — skip entirely
+                    logger.warning("Skipping {}: {}", signal.symbol, slip_reason)
+                    errors.append({"symbol": signal.symbol, "error": f"slippage guard: {slip_reason}"})
+                continue
+
             raw_qty = target_value / price
             # Crypto: 6 decimal places; stocks/futures: 2 decimals (fractional shares for paper)
             qty = round(raw_qty, 6) if is_crypto else round(raw_qty, 2)
@@ -473,11 +578,13 @@ def build_from_cached_signals(
         "positions_added": added,
         "positions_reduced": reduced,
         "positions_closed": closed,
+        "pending_orders": queued,
         "errors": errors,
         "signals_considered": len(filtered),
         "signals_selected": len(signals),
         "category_breakdown": cat_breakdown,
         "cash_remaining": round(portfolio.cash, 2),
+        "reserved_cash": round(portfolio.reserved_cash, 2),
         "total_value": round(portfolio.total_value, 2),
     }
 

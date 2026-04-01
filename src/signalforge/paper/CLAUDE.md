@@ -44,4 +44,10 @@
 | #3367 | " | 🔵 | Background price updater implements trading-day optimization for stock prices | ~439 |
 | #3370 | 11:29 PM | ✅ | Updated module documentation to reflect intraday stock price support | ~318 |
 | #3369 | " | 🟣 | Implemented market-hours-aware stock price fetching with automatic source switching | ~448 |
+
+### Apr 1, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #3482 | 2:04 PM | 🔄 | Implemented reconciliation-based cash reservation management for pending orders | ~436 |
 </claude-mem-context>
