@@ -360,7 +360,8 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             return
         # Return data immediately — snapshots recorded by _background_price_updater
         portfolio = manager.load()
-        history = sorted(_load_history(manager.path), key=lambda h: h.get("timestamp", ""))
+        with _history_lock:
+            history = sorted(_load_history(manager.path), key=lambda h: h.get("timestamp", ""))
         # Fees: open_fees from actual recorded values; close_fees estimated per asset type
         from signalforge.paper.portfolio import _fee_for_symbol
         open_fees = sum(p.open_fee for p in portfolio.positions)
@@ -1024,7 +1025,8 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
             categories = portfolio.asset_categories or ["us_stocks", "crypto"]
 
             # Clear value history before building — fresh chart from build moment
-            _save_history(manager.path, [])
+            with _history_lock:
+                _save_history(manager.path, [])
 
             from signalforge.paper.pending_orders import PendingOrderManager
 
