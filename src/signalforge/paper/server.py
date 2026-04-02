@@ -244,7 +244,6 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
     """Handle API and static file requests for the paper trading dashboard."""
 
     account_manager: AccountManager  # set on the class before server starts
-    legacy_manager: PortfolioManager | None = None  # set when --path is used
 
     def _parse_request_path(self) -> tuple[str, dict[str, str]]:
         """Split self.path into route and query params."""
@@ -256,8 +255,6 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
 
     def _get_manager(self, params: dict[str, str] | None = None) -> PortfolioManager:
         """Get PortfolioManager for the requested account."""
-        if self.__class__.legacy_manager is not None:
-            return self.__class__.legacy_manager
         account = (params or {}).get("account", "default")
         return self.__class__.account_manager.get_manager(account)
 
@@ -357,9 +354,8 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_error_json(HTTPStatus.NOT_FOUND, str(exc))
             return
-        # Return data immediately — price updates happen via /api/update-prices
+        # Return data immediately — snapshots recorded by _background_price_updater
         portfolio = manager.load()
-        _append_snapshot(manager)
         history = sorted(_load_history(manager.path), key=lambda h: h.get("timestamp", ""))
         # Fees: open_fees from actual recorded values; close_fees estimated per asset type
         from signalforge.paper.portfolio import _fee_for_symbol
@@ -516,6 +512,10 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 stop_loss=float(body["stop_loss"]),
                 target_price=float(body["target_price"]),
             )
+            try:
+                _append_snapshot(manager)
+            except Exception:
+                pass
             self._send_json(position.to_dict(), status=HTTPStatus.CREATED)
         except ValueError as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -542,6 +542,10 @@ class PaperTradingHandler(BaseHTTPRequestHandler):
                 exit_price=float(body["exit_price"]),
                 reason=body.get("reason", "manual"),
             )
+            try:
+                _append_snapshot(manager)
+            except Exception:
+                pass
             self._send_json(trade.to_dict())
         except ValueError as exc:
             self._send_error_json(HTTPStatus.BAD_REQUEST, str(exc))
@@ -1108,12 +1112,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=8787,
         help="Port to listen on (default: 8787)",
     )
-    parser.add_argument(
-        "--path",
-        type=Path,
-        default=None,
-        help="Path to portfolio JSON file (default: ~/.signalforge/paper_portfolio.json)",
-    )
     return parser.parse_args(argv)
 
 
@@ -1122,12 +1120,6 @@ def main(argv: list[str] | None = None) -> None:
 
     am = AccountManager()
     PaperTradingHandler.account_manager = am
-
-    # If --path is given, use legacy single-file mode
-    if args.path:
-        PaperTradingHandler.legacy_manager = PortfolioManager(path=args.path)
-    else:
-        PaperTradingHandler.legacy_manager = None
 
     class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True

@@ -789,14 +789,11 @@ def history(
 @paper_app.command(name="dashboard")
 def paper_dashboard(
     port: int = typer.Option(8787, "--port", help="Server port"),
-    portfolio_path: Optional[Path] = typer.Option(None, "--path", "-p"),
 ) -> None:
     """Launch the paper trading web dashboard (supports all accounts)."""
     from signalforge.paper.server import main as server_main
 
     args = [f"--port={port}"]
-    if portfolio_path:
-        args.append(f"--path={portfolio_path}")
 
     console.print(
         Panel(
