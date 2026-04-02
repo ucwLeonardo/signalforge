@@ -67,6 +67,9 @@ _JSON_CONTENT = "application/json"
 # Value-history tracker
 # ---------------------------------------------------------------------------
 
+_history_lock = threading.Lock()
+
+
 def _history_path(portfolio_path: Path) -> Path:
     """Return the value-history JSON path next to the portfolio file."""
     return portfolio_path.parent / "paper_value_history.json"
@@ -217,23 +220,24 @@ def _background_price_updater(account_manager: AccountManager) -> None:
 def _append_snapshot(manager: PortfolioManager) -> None:
     """Append a value snapshot to the history file.
 
-    Deduplicates: skips if total_value and positions_value are identical to the
-    last recorded snapshot (avoids flat duplicate lines on the chart).
+    Thread-safe: serialises load/append/save via _history_lock so concurrent
+    callers (background updater + request handlers) cannot lose each other's
+    entries.
     """
     portfolio = manager.load()
     total_val = round(portfolio.total_value, 2)
     pos_val = round(portfolio.positions_value, 2)
     cash_val = round(portfolio.cash, 2)
 
-    history = _load_history(manager.path)
-
-    history.append({
-        "timestamp": datetime.now().isoformat(),
-        "total_value": total_val,
-        "cash": cash_val,
-        "positions_value": pos_val,
-    })
-    _save_history(manager.path, history)
+    with _history_lock:
+        history = _load_history(manager.path)
+        history.append({
+            "timestamp": datetime.now().isoformat(),
+            "total_value": total_val,
+            "cash": cash_val,
+            "positions_value": pos_val,
+        })
+        _save_history(manager.path, history)
 
 
 # ---------------------------------------------------------------------------
